@@ -2,6 +2,7 @@
 nixPkgs = [
     "python313", 
     "chromium",
+    "google-chrome",
     "glib",
     "nss",
     "nspr",
