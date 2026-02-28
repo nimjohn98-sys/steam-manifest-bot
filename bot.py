@@ -9,7 +9,7 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # This is where you would put your RAW GitHub link (click 'Raw' on GitHub to get it)
-GITHUB_CODE_URL "https://github.com/nimjohn98-sys/steam-manifest-bot/blob/main/bot.py"
+GITHUB_CODE_URL="https://raw.githubusercontent.com/nimjohn98-sys/steam-manifest-bot/main/bot.py"
 
 def download_manifest(app_id):
     """Uses cloudscraper to bypass Cloudflare/Bot protection."""
