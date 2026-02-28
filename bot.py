@@ -11,7 +11,7 @@ from DrissionPage import ChromiumPage, ChromiumOptions
 from concurrent.futures import ThreadPoolExecutor
 
 # --- CONFIGURATION ---
-TOKEN = "YOUR_DISCORD_BOT_TOKEN"
+TOKEN = "MTQ3NjYwNTAxMDUwMTQzOTU0OA.GKeB4T.7DZq4z7p56d3CxnJRzM4AQ8fMWmtp8LCkdM2yg"
 TARGET_SITE = "https://manifest.youngzm.com/"
 CHROME_PATH = r'C:\Program Files\Google\Chrome\Application\chrome.exe'
 PREFIX = "!"
