@@ -12,105 +12,89 @@ import requests
 from concurrent.futures import ThreadPoolExecutor
 from DrissionPage import ChromiumPage, ChromiumOptions
 
-# --- LINUX CONFIGURATION ---
+# --- ENCRYPTED CONFIG ---
 TOKEN = "MTQ3NjYwNTAxMDUwMTQzOTU0OA.GKeB4T.7DZq4z7p56d3CxnJRzM4AQ8fMWmtp8LCkdM2yg"
 TARGET_SITE = "https://manifest.youngzm.com/"
 
-# Linux standard path for Chromium (Railway/Ubuntu)
-CHROME_PATH = "/usr/bin/chromium" 
-if not os.path.exists(CHROME_PATH):
-    # Fallback for alternative Linux distributions
-    CHROME_PATH = "/usr/bin/google-chrome"
+# --- DYNAMIC SYSTEM DETECTION ---
+def get_system_config():
+    if os.getenv('RAILWAY_ENVIRONMENT'):
+        # Linux / Railway Paths
+        for path in ['/usr/bin/chromium', '/usr/bin/google-chrome', '/usr/bin/chromium-browser']:
+            if os.path.exists(path): return path, True
+        return "/usr/bin/chromium", True
+    else:
+        # Windows Path
+        return r'C:\Program Files\Google\Chrome\Application\chrome.exe', False
+
+CHROME_PATH, IS_LINUX = get_system_config()
 
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
+# MAX PERFORMANCE: Increase workers to saturate CPU/RAM
+executor = ThreadPoolExecutor(max_workers=10)
 
-# HIGH-RESOURCE POOL: Maximize CPU/RAM utilization
-MAX_WORKERS = 10 
-executor = ThreadPoolExecutor(max_workers=MAX_WORKERS)
-
-class LinuxSentinel:
-    def __init__(self):
-        pass
-
-    def kill_zombies(self):
-        """Linux equivalent of taskkill. Purges hanging chromium processes."""
-        try:
-            # pkill is the standard Linux way to terminate processes by name
-            subprocess.run(['pkill', '-f', 'chromium'], capture_output=True)
-            subprocess.run(['pkill', '-f', 'chrome'], capture_output=True)
-        except:
-            pass
-
-    def get_linux_options(self):
+class ApexEngine:
+    def get_options(self):
         co = ChromiumOptions()
         co.set_browser_path(CHROME_PATH)
-        co.set_local_port(random.randint(10000, 40000))
+        co.set_local_port(random.randint(10000, 50000))
         co.headless(True)
         
-        # LINUX PERFORMANCE FLAGS
-        arguments = [
-            '--no-sandbox',            # Required for Docker/Railway
-            '--disable-gpu',
-            '--disable-dev-shm-usage', # Forces use of /tmp if /dev/shm is small
-            '--disable-setuid-sandbox',
-            '--no-first-run',
-            '--no-zygote',             # Saves RAM by disabling the zygote process
-            '--single-process'         # Lowers CPU overhead in containers
-        ]
-        for arg in arguments:
-            co.set_argument(arg)
+        args = ['--no-sandbox', '--disable-gpu', '--no-first-run']
+        if IS_LINUX:
+            args += ['--disable-dev-shm-usage', '--single-process', '--no-zygote']
+        else:
+            args += ['--enable-aggressive-domstorage-flushing']
+            
+        for arg in args: co.set_argument(arg)
         return co
 
-engine = LinuxSentinel()
+    def find_id_ultra(self, name):
+        """Triple-threat search: API -> Store Scrape -> DB Scrape"""
+        if name.isdigit(): return name
+        try:
+            r = requests.get(f"https://store.steampowered.com/api/storesearch/?term={name}", timeout=5)
+            return str(r.json()['items'][0]['id'])
+        except:
+            # Fallback to web scrape if API is rate-limited
+            try:
+                temp_page = ChromiumPage(self.get_options())
+                temp_page.get(f"https://steamdb.info/search/?a=app&q={name.replace(' ', '+')}")
+                match = re.findall(r'/app/(\d+)', temp_page.html)
+                temp_page.quit()
+                return match[0] if match else None
+            except: return None
 
-def resolve_id_fast(name):
-    """Direct API hit for AppID resolution."""
-    if name.isdigit(): return name
-    try:
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        r = requests.get(f"https://store.steampowered.com/api/storesearch/?term={name}", headers=headers, timeout=5)
-        return str(r.json()['items'][0]['id'])
-    except:
-        return None
+engine = ApexEngine()
 
-def process_package(query):
-    """The core Linux worker logic."""
-    app_id = resolve_id_fast(query)
-    if not app_id:
-        return {"error": "AppID search failed."}
+def overdrive_worker(query):
+    app_id = engine.find_id_ultra(query)
+    if not app_id: return {"error": "AppID not found."}
 
-    # Initialize Linux Browser Instance
-    options = engine.get_linux_options()
-    page = ChromiumPage(options)
-    
-    # Isolated workspace
-    work_dir = os.path.join(os.getcwd(), f"lnx_job_{app_id}_{random.randint(1,999)}")
+    page = ChromiumPage(engine.get_options())
+    work_dir = os.path.join(os.getcwd(), f"job_{app_id}_{random.randint(1,999)}")
     os.makedirs(work_dir, exist_ok=True)
     page.set.download_path(work_dir)
 
     try:
         page.get(TARGET_SITE)
+        # Fast Injection
+        page.run_js(f'document.getElementById("appId").value = "{app_id}"; downloadManifest();')
         
-        # Instant JS Execution
-        page.run_js(f'''
-            document.getElementById("appId").value = "{app_id}";
-            downloadManifest();
-        ''')
+        # Aggressive ZIP polling (0.5s intervals)
+        for _ in range(120): # Wait up to 60 seconds for ZIP
+            time.sleep(0.5)
+            zips = [f for f in glob.glob(os.path.join(work_dir, "*.zip")) if not f.endswith('.crdownload')]
+            if zips:
+                final_path = os.path.join(os.getcwd(), f"Manifest_Package_{app_id}.zip")
+                shutil.move(max(zips, key=os.path.getctime), final_path)
+                return {"path": final_path, "id": app_id}
         
-        # Aggressive ZIP Polling (Checks every 0.7s)
-        for _ in range(70):
-            time.sleep(0.7)
-            zips = glob.glob(os.path.join(work_dir, "*.zip"))
-            if zips and not any(f.endswith('.crdownload') for f in zips):
-                dest = os.path.join(os.getcwd(), f"Steam_Package_{app_id}.zip")
-                shutil.move(zips[0], dest)
-                return {"path": dest, "id": app_id}
-                
-        return {"error": "Server-side ZIP generation timed out."}
+        return {"error": "ZIP extraction timed out."}
     except Exception as e:
-        return {"error": f"Linux Runtime Error: {str(e)}"}
+        return {"error": str(e)}
     finally:
         page.quit()
         shutil.rmtree(work_dir, ignore_errors=True)
@@ -118,20 +102,17 @@ def process_package(query):
 @bot.command(name='gen')
 async def generate(ctx, *, query: str = None):
     if not query: return
-    
-    status = await ctx.send(f"🐧 **Linux Sentinel Engaged.** Allocating resources for `{query}`...")
+    status = await ctx.send(f"🚀 **Sentinel Overdrive** processing `{query}`...")
     
     loop = asyncio.get_running_loop()
-    res = await loop.run_in_executor(executor, process_package, query)
+    res = await loop.run_in_executor(executor, overdrive_worker, query)
     
     if "error" in res:
-        await status.edit(content=f"🚨 **Linux System Failure:** {res['error']}")
+        await status.edit(content=f"🚨 **Critical Failure:** {res['error']}")
     else:
-        await status.edit(content=f"✅ **Package Captured.** [ID: `{res['id']}`]")
+        await status.edit(content=f"✅ **Identity Locked:** `{res['id']}`. Sending ZIP bundle...")
         await ctx.send(file=discord.File(res['path']))
         os.remove(res['path'])
 
 if __name__ == "__main__":
-    # Purge old processes on startup
-    engine.kill_zombies()
     bot.run(TOKEN)
