@@ -1,82 +1,73 @@
 import time
 import random
-import os
-from datetime import datetime
+import cloudscraper
 from curl_cffi import requests
-from bs4 import BeautifulSoup
+from datetime import datetime
 
-class UnstoppableManifestBot:
-    def __init__(self):
-        # We start with a fresh session
-        self.session = requests.Session()
-        self.base_url = "https://raw.githubusercontent.com/SteamTools-Team/GameList/main/manifest/"
-        # A wide range of modern browser identities to cycle through
-        self.identities = ["chrome110", "chrome120", "safari15_5", "edge101", "safari_ios_16_0"]
+class NuclearSteamBot:
+    def __init__(self, app_id):
+        self.app_id = app_id
+        self.url = f"https://raw.githubusercontent.com/SteamTools-Team/GameList/main/manifest/{app_id}.lua"
         self.log_file = "learning_log.txt"
+        # Proxy format (Optional): 'http://user:pass@host:port'
+        self.proxy = None 
 
-    def _log(self, message):
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    def _log(self, status, msg=""):
+        t = datetime.now().strftime("%H:%M:%S")
         with open(self.log_file, "a") as f:
-            f.write(f"[{timestamp}] {message}\n")
+            f.write(f"[{t}] {status}: {msg}\n")
 
-    def fetch_with_auto_fix(self, app_id):
-        url = f"{self.base_url}{app_id}.lua"
-        attempts = 0
+    def solve_and_fetch(self):
+        print(f"🌀 Revamping strategy for AppID: {self.app_id}")
         
-        # This loop is the 'FIX'—it won't stop until success or exhausted identities
-        while attempts < len(self.identities):
-            identity = self.identities[attempts]
-            print(f"🚀 [Attempt {attempts+1}] Using Identity: {identity}")
+        # Strategy 1: The Cloudscraper Bypass (Handles JS Challenges)
+        try:
+            print("🚀 Strategy 1: Cloudscraper JS-Bypass...")
+            scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False})
+            resp = scraper.get(self.url, timeout=20)
+            
+            if resp.status_code == 200:
+                self._log("SUCCESS", "Bypassed via Cloudscraper")
+                return resp.text
+        except Exception as e:
+            print(f"⚠️ Strategy 1 failed. Moving to Nuclear Fix...")
 
+        # Strategy 2: Nuclear TLS Impersonation (Handles Handshake blocks)
+        identities = ["chrome120", "safari15_5", "edge101", "chrome110"]
+        for identity in identities:
+            print(f"🔄 Strategy 2: Rotating to {identity}...")
             try:
-                # The CORE FIX: impersonate bypasses TLS fingerprinting
-                response = self.session.get(url, impersonate=identity, timeout=20)
+                # Reset session to clear tracking cookies
+                with requests.Session() as s:
+                    proxies = {"http": self.proxy, "https": self.proxy} if self.proxy else None
+                    r = s.get(self.url, impersonate=identity, proxies=proxies, timeout=25)
 
-                if response.status_code == 200:
-                    print(f"✅ UNBLOCKED: Manifest retrieved for AppID {app_id}")
-                    self._log(f"SUCCESS: {app_id} unblocked with {identity}")
-                    return response.text
-                
-                elif response.status_code == 404:
-                    print(f"⚠️ 404: Manifest {app_id}.lua does not exist in this repo.")
-                    return None
-
-                elif response.status_code in [403, 429]:
-                    # AUTO-FIX LOGIC:
-                    print(f"❌ BLOCKED ({response.status_code}). Resetting session and rotating...")
-                    self._log(f"BLOCK_DETECTED: {response.status_code} with {identity}")
+                    if r.status_code == 200:
+                        self._log("SUCCESS", f"Unblocked with {identity}")
+                        return r.text
                     
-                    # 1. Clear cookies to remove 'tracked' session
-                    self.session.cookies.clear()
+                    if r.status_code == 404:
+                        print("🛑 404: This AppID manifest does not exist.")
+                        return None
                     
-                    # 2. Add 'Human Jitter' (random wait)
-                    wait_time = random.uniform(5, 10)
-                    print(f"⏱️ Mimicking human pause... waiting {wait_time:.1f}s")
-                    time.sleep(wait_time)
-                    
-                    # 3. Move to the next identity in the next loop
-                    attempts += 1
-                
+                    if r.status_code in [403, 429]:
+                        print(f"❌ Still blocked ({r.status_code}). Learning... waiting...")
+                        time.sleep(random.uniform(5, 10)) # Real human jitter
+                        
             except Exception as e:
-                print(f"💥 Connection Error: {e}. Trying next identity...")
-                attempts += 1
-                time.sleep(2)
-
-        print("🛑 All automated fixes exhausted. Site may require a Proxy.")
+                self._log("ERROR", str(e))
+        
         return None
 
-# --- COPY & PASTE TO RUN ---
 if __name__ == "__main__":
-    # Your Target AppID (e.g., 367520 for Hollow Knight)
-    APP_ID = "367520" 
-    
-    bot = UnstoppableManifestBot()
-    manifest_data = bot.fetch_with_auto_fix(APP_ID)
+    APP_ID = "367520" # Change to your ID
+    bot = NuclearSteamBot(APP_ID)
+    content = bot.solve_and_fetch()
 
-    if manifest_data:
-        # Save the result
+    if content:
         with open(f"{APP_ID}.lua", "w", encoding="utf-8") as f:
-            f.write(manifest_data)
-        print(f"\n💾 Manifest saved as {APP_ID}.lua")
-        print("--- Manifest Preview ---")
-        print(manifest_data[:150] + "...")
+            f.write(content)
+        print(f"✅ FIXED: {APP_ID}.lua saved successfully!")
+    else:
+        print("\n💥 ALL BYPASSES FAILED. The site has likely banned your IP.")
+        print("💡 Solution: Add a proxy to the 'self.proxy' line in the code.")
