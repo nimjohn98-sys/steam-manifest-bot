@@ -1,30 +1,22 @@
 [phases.setup]
-# This installs the Linux OS requirements for Chrome/Chromium and Python 3.13
 nixPkgs = [
     "python313", 
-    "chromium", 
-    "glib", 
-    "nss", 
-    "nspr", 
-    "atk", 
-    "at-spi2-atk", 
-    "libdrm", 
-    "mesa", 
-    "gbm", 
-    "pango", 
-    "cairo", 
+    "chromium",
+    "glib",
+    "nss",
+    "nspr",
+    "atk",
+    "at-spi2-atk",
+    "libdrm",
+    "mesa",
+    "gbm",
+    "pango",
+    "cairo",
     "alsa-lib"
 ]
 
 [phases.build]
-# Standard build command to install Python dependencies
 cmds = ["pip install -r requirements.txt"]
 
 [start]
-# Force the bot to run with optimized memory management
 cmd = "python bot.py"
-
-[variables]
-# Forces Chrome to use the headless mode environment correctly in Linux
-CHROME_BIN = "/usr/bin/chromium"
-PYTHONUNBUFFERED = "1"
