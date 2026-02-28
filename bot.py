@@ -12,65 +12,62 @@ import requests
 from concurrent.futures import ThreadPoolExecutor
 from DrissionPage import ChromiumPage, ChromiumOptions
 
-# --- ENCRYPTED CONFIG ---
+# --- CONFIGURATION ---
 TOKEN = "MTQ3NjYwNTAxMDUwMTQzOTU0OA.GKeB4T.7DZq4z7p56d3CxnJRzM4AQ8fMWmtp8LCkdM2yg"
 TARGET_SITE = "https://manifest.youngzm.com/"
 
-# --- DYNAMIC SYSTEM DETECTION ---
-def get_system_config():
+# --- DYNAMIC BROWSER DISCOVERY ---
+def get_chrome_path():
     if os.getenv('RAILWAY_ENVIRONMENT'):
-        # Linux / Railway Paths
+        # 1. Ask Linux where the command is
+        for cmd in ['chromium', 'chromium-browser', 'google-chrome-stable', 'google-chrome']:
+            path = shutil.which(cmd)
+            if path: return path
+        # 2. Check common Linux locations
         for path in ['/usr/bin/chromium', '/usr/bin/google-chrome', '/usr/bin/chromium-browser']:
-            if os.path.exists(path): return path, True
-        return "/usr/bin/chromium", True
+            if os.path.exists(path): return path
+        return "/usr/bin/chromium" # Last resort
     else:
-        # Windows Path
-        return r'C:\Program Files\Google\Chrome\Application\chrome.exe', False
+        return r'C:\Program Files\Google\Chrome\Application\chrome.exe'
 
-CHROME_PATH, IS_LINUX = get_system_config()
+CHROME_PATH = get_chrome_path()
+print(f"DEBUG: Sentinel Engine using browser at: {CHROME_PATH}")
 
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
-# MAX PERFORMANCE: Increase workers to saturate CPU/RAM
 executor = ThreadPoolExecutor(max_workers=10)
 
-class ApexEngine:
+class SentinelEngine:
     def get_options(self):
         co = ChromiumOptions()
         co.set_browser_path(CHROME_PATH)
         co.set_local_port(random.randint(10000, 50000))
         co.headless(True)
         
-        args = ['--no-sandbox', '--disable-gpu', '--no-first-run']
-        if IS_LINUX:
-            args += ['--disable-dev-shm-usage', '--single-process', '--no-zygote']
-        else:
-            args += ['--enable-aggressive-domstorage-flushing']
-            
+        # Aggressive Linux Container Flags
+        args = [
+            '--no-sandbox',
+            '--disable-dev-shm-usage', # FIXES RAILWAY CRASHES
+            '--disable-gpu',
+            '--no-zygote',
+            '--remote-debugging-port=9222'
+        ]
         for arg in args: co.set_argument(arg)
         return co
 
-    def find_id_ultra(self, name):
-        """Triple-threat search: API -> Store Scrape -> DB Scrape"""
+    def resolve_id(self, name):
         if name.isdigit(): return name
         try:
             r = requests.get(f"https://store.steampowered.com/api/storesearch/?term={name}", timeout=5)
             return str(r.json()['items'][0]['id'])
         except:
-            # Fallback to web scrape if API is rate-limited
-            try:
-                temp_page = ChromiumPage(self.get_options())
-                temp_page.get(f"https://steamdb.info/search/?a=app&q={name.replace(' ', '+')}")
-                match = re.findall(r'/app/(\d+)', temp_page.html)
-                temp_page.quit()
-                return match[0] if match else None
-            except: return None
+            return None
 
-engine = ApexEngine()
+engine = SentinelEngine()
 
-def overdrive_worker(query):
-    app_id = engine.find_id_ultra(query)
+def process_worker(query):
+    app_id = engine.resolve_id(query)
     if not app_id: return {"error": "AppID not found."}
 
     page = ChromiumPage(engine.get_options())
@@ -83,16 +80,16 @@ def overdrive_worker(query):
         # Fast Injection
         page.run_js(f'document.getElementById("appId").value = "{app_id}"; downloadManifest();')
         
-        # Aggressive ZIP polling (0.5s intervals)
-        for _ in range(120): # Wait up to 60 seconds for ZIP
+        # Wait up to 60s for ZIP
+        for _ in range(120):
             time.sleep(0.5)
             zips = [f for f in glob.glob(os.path.join(work_dir, "*.zip")) if not f.endswith('.crdownload')]
             if zips:
-                final_path = os.path.join(os.getcwd(), f"Manifest_Package_{app_id}.zip")
-                shutil.move(max(zips, key=os.path.getctime), final_path)
-                return {"path": final_path, "id": app_id}
+                dest = os.path.join(os.getcwd(), f"Package_{app_id}.zip")
+                shutil.move(max(zips, key=os.path.getctime), dest)
+                return {"path": dest, "id": app_id}
         
-        return {"error": "ZIP extraction timed out."}
+        return {"error": "ZIP generation timed out."}
     except Exception as e:
         return {"error": str(e)}
     finally:
@@ -102,15 +99,15 @@ def overdrive_worker(query):
 @bot.command(name='gen')
 async def generate(ctx, *, query: str = None):
     if not query: return
-    status = await ctx.send(f"🚀 **Sentinel Overdrive** processing `{query}`...")
+    status = await ctx.send(f"🛡️ **Sentinel Engine** identifying `{query}`...")
     
     loop = asyncio.get_running_loop()
-    res = await loop.run_in_executor(executor, overdrive_worker, query)
+    res = await loop.run_in_executor(executor, process_worker, query)
     
     if "error" in res:
-        await status.edit(content=f"🚨 **Critical Failure:** {res['error']}")
+        await status.edit(content=f"🚨 **Failure:** {res['error']}")
     else:
-        await status.edit(content=f"✅ **Identity Locked:** `{res['id']}`. Sending ZIP bundle...")
+        await status.edit(content=f"✅ **ID `{res['id']}` Verified.** Sending ZIP...")
         await ctx.send(file=discord.File(res['path']))
         os.remove(res['path'])
 
