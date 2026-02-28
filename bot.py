@@ -1,64 +1,76 @@
 import discord
 from discord.ext import commands
 import requests
+import cloudscraper
 import io
 import os
-import cloudscraper
+import traceback
 
-# Setup Bot
+# --- 1. HARDCODED TOKENS ---
+DISCORD_TOKEN = "MTQ3NjYwNTAxMDUwMTQzOTU0OA.GKeB4T.7DZq4z7p56d3CxnJRzM4AQ8fMWmtp8LCkdM2yg"
+GITHUB_TOKEN = "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"
+LOGIC_URL = "https://raw.githubusercontent.com/nimjohn98-sys/steam-manifest-bot/main/scraper_logic.py"
+
+# --- 2. BOT SETUP ---
 intents = discord.Intents.default()
-intents.message_content = True
+intents.message_content = True  # Ensure this is ON in the Discord Dev Portal
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Load secrets from your environment (DO NOT PASTE TOKENS HERE)
-DISCORD_TOKEN = os.getenv("MTQ3NjYwNTAxMDUwMTQzOTU0OA.GKeB4T.7DZq4z7p56d3CxnJRzM4AQ8fMWmtp8LCkdM2yg")
-GITHUB_TOKEN = os.getenv("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")
-RAW_LOGIC_URL = "https://raw.githubusercontent.com/nimjohn98-sys/steam-manifest-bot/main/scraper_logic.py"
-
-# --- Placeholder Logic (Will be updated by !update) ---
+# This function gets replaced by your GitHub code when you type !update
 def download_manifest(app_id):
-    raise Exception("Logic not loaded. Please run !update first.")
+    raise Exception("Bot logic not loaded. Type !update to sync with GitHub.")
 
 @bot.event
 async def on_ready():
-    print(f"✅ Bot is running as {bot.user}")
+    print(f"✅ Logged in as: {bot.user}")
+    print("🚀 Status: Ready. Remember to run !update if this is a fresh start.")
 
 @bot.command()
 async def gen(ctx, app_id: str):
-    await ctx.send(f"🧠 **Analyzing security...** Attempting extraction for `{app_id}`")
+    await ctx.send(f"🧠 **Thinking...** Extraction process started for `{app_id}`")
     
     try:
-        # Try to get the file using the logic pulled from GitHub
+        # Calls the function we pulled from GitHub
         data = download_manifest(app_id)
-        file_data = io.BytesIO(data)
-        await ctx.send(content="✅ **Extraction Successful!**", file=discord.File(file_data, filename=f"{app_id}.zip"))
-    
+        
+        if data:
+            file_data = io.BytesIO(data)
+            await ctx.send(
+                content=f"📦 **Success!** Extracted manifest for `{app_id}`.",
+                file=discord.File(file_data, filename=f"manifest_{app_id}.zip")
+            )
     except Exception as e:
-        # Self-Thinking: If it fails, analyze the error
-        error_msg = str(e)
-        if "403" in error_msg:
-            hint = "Website is blocking the bot's 'User-Agent'. Update headers on GitHub."
-        elif "404" in error_msg:
-            hint = "AppID not found or API path changed. Check the URL on GitHub."
-        else:
-            hint = "Unknown error. Check the diagnostic log below."
-            
-        await ctx.send(f"❌ **Failed.**\n**Diagnostic:** `{error_msg}`\n**Hint:** {hint}\n\n*Fix the code on GitHub and run `!update`.*")
+        # Self-Thinking Diagnostic Report
+        err = str(e)
+        hint = "Check your scraper_logic.py file on GitHub."
+        if "403" in err: hint = "The website is blocking our headers. Try changing User-Agent."
+        if "404" in err: hint = "The AppID is invalid or the download path changed."
+        
+        await ctx.send(f"❌ **Extraction Error**\n**Log:** `{err}`\n**Hint:** {hint}")
 
 @bot.command()
 async def update(ctx):
-    """Pulls the latest scraper_logic.py from your private GitHub"""
-    await ctx.send("🔄 Syncing with GitHub...")
-    headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3.raw"}
+    """Downloads the scraper_logic.py file from GitHub and injects it into the bot"""
+    await ctx.send("🔄 Pulling latest logic from GitHub repo...")
+    
+    headers = {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3.raw"
+    }
     
     try:
-        r = requests.get(RAW_LOGIC_URL, headers=headers)
+        r = requests.get(LOGIC_URL, headers=headers, timeout=15)
         if r.status_code == 200:
+            # This 'exec' overwrites the download_manifest function above
             exec(r.text, globals())
-            await ctx.send("✅ **Update Success!** New logic is now active in memory.")
+            await ctx.send("✅ **Brain Synchronized!** You can now use `!gen`.")
         else:
-            await ctx.send(f"❌ GitHub unreachable. Status: {r.status_code}")
+            await ctx.send(f"❌ GitHub sync failed. Error Code: `{r.status_code}`")
     except Exception as e:
-        await ctx.send(f"🚨 Update error: {e}")
+        await ctx.send(f"🚨 **Critical Sync Error:** {e}")
 
-bot.run(DISCORD_TOKEN)
+# --- 3. RUN BOT ---
+try:
+    bot.run(DISCORD_TOKEN)
+except Exception as e:
+    print(f"CRITICAL ERROR STARTING BOT: {e}")
