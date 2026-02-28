@@ -7,65 +7,47 @@ intents = discord.Intents.default()
 intents.message_content = True 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# These headers are MANDATORY. Without them, the site returns a 403 Forbidden.
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Referer": "https://manifest.youngzm.com/"
+    "Referer": "https://manifest.youngzm.com/",
+    "Accept": "application/json, text/plain, */*"
 }
 
 @bot.event
 async def on_ready():
-    print(f'✅ Bot is online as {bot.user.name}')
-
-@bot.event
-async def on_command_error(ctx, error):
-    if isinstance(error, commands.CommandOnCooldown):
-        await ctx.send(f"⏳ **Cooldown!** Please wait `{error.retry_after:.1f}`s.")
+    print(f'✅ Bot Fixed & Online: {bot.user.name}')
 
 @bot.command()
-@commands.cooldown(1, 10, commands.BucketType.user)
-async def gen(ctx, *, search_term: str):
-    """Search for a game name, find ID, and download manifest zip."""
-    
-    # 1. If user gave a number, use it. If not, search Steam.
-    if search_term.isdigit():
-        app_id = search_term
-        game_name = f"AppID {app_id}"
-    else:
-        await ctx.send(f"🔍 Searching Steam for `{search_term}`...")
-        search_url = f"https://store.steampowered.com/api/storesearch/?term={search_term}&l=english&cc=US"
-        try:
-            r = requests.get(search_url).json()
-            if r.get('total', 0) > 0:
-                app_id = str(r['items'][0]['id'])
-                game_name = r['items'][0]['name']
+@commands.cooldown(1, 5, commands.BucketType.user)
+async def gen(ctx, *, app_id: str):
+    """Hits the site's internal download trigger directly."""
+    await ctx.send(f"🔍 Accessing manifest database for `{app_id}`...")
+
+    # This is the EXACT URL triggered by the 'Download' button in the search results
+    # It bypasses the need to 'click' the UI.
+    download_url = f"https://manifest.youngzm.com/api/download/{app_id}"
+
+    try:
+        # We use a session to maintain the connection like a real browser
+        with requests.Session() as session:
+            response = session.get(download_url, headers=HEADERS, timeout=30)
+            
+            # Check if we actually got a ZIP file and not an error page
+            if response.status_code == 200 and len(response.content) > 500:
+                # Double check content type to ensure it's a zip
+                if "application/zip" in response.headers.get('Content-Type', '').lower() or response.content[:2] == b'PK':
+                    file_data = io.BytesIO(response.content)
+                    zip_file = discord.File(file_data, filename=f"manifest_{app_id}.zip")
+                    
+                    await ctx.send(content=f"✅ **File Grabbed!** Here is your manifest for `{app_id}`:", file=zip_file)
+                else:
+                    await ctx.send(f"❌ The site returned data, but it wasn't a valid ZIP. The manifest for `{app_id}` might be empty or restricted.")
             else:
-                return await ctx.send(f"❌ Could not find a game named `{search_term}` on Steam.")
-        except:
-            return await ctx.send("🚨 Steam search failed. Try using the ID number directly.")
+                await ctx.send(f"❌ **Download Failed.** The website search returned no file for `{app_id}`. (Status: {response.status_code})")
+                
+    except Exception as e:
+        await ctx.send(f"🚨 **Technical Error:** {str(e)}")
 
-    # 2. Try downloading the ZIP
-    await ctx.send(f"🛠️ Found **{game_name}** (`{app_id}`). Fetching manifest...")
-
-    # We try the AppID AND common Depot IDs (AppID + 1 is very common)
-    ids_to_try = [app_id, str(int(app_id) + 1)]
-    
-    success = False
-    for target_id in ids_to_try:
-        api_url = f"https://manifest.youngzm.com/api/download/{target_id}"
-        try:
-            response = requests.get(api_url, headers=HEADERS, timeout=25)
-            # Only accept if it's a real file (usually > 1KB)
-            if response.status_code == 200 and len(response.content) > 1000:
-                file_data = io.BytesIO(response.content)
-                zip_file = discord.File(file_data, filename=f"{game_name.replace(' ', '_')}_{target_id}.zip")
-                await ctx.send(content=f"✅ **Manifest Ready!**\nGame: **{game_name}**\nID used: `{target_id}`", file=zip_file)
-                success = True
-                break
-        except:
-            continue
-
-    if not success:
-        await ctx.send(f"❌ **Not Found:** No valid zip found for **{game_name}** on the manifest site.\n🔗 Try manually: https://manifest.youngzm.com/?query={app_id}")
-
-# Replace with your token
+# Your Token
 bot.run('MTQ3NjYwNTAxMDUwMTQzOTU0OA.GKeB4T.7DZq4z7p56d3CxnJRzM4AQ8fMWmtp8LCkdM2yg')
