@@ -3,4 +3,4 @@ requests
 cloudscraper
 audioop-lts
 PyGithub
-googlesearch-python
+google-genai
