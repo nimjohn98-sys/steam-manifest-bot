@@ -1,15 +1,30 @@
-# --- RAILWAY ADAPTATION ---
-# This checks if it's on Linux (Railway) or Windows (Your PC)
-IS_RAILWAY = os.getenv('RAILWAY_ENVIRONMENT') is not None
+[phases.setup]
+# This installs the Linux OS requirements for Chrome/Chromium and Python 3.13
+nixPkgs = [
+    "python313", 
+    "chromium", 
+    "glib", 
+    "nss", 
+    "nspr", 
+    "atk", 
+    "at-spi2-atk", 
+    "libdrm", 
+    "mesa", 
+    "gbm", 
+    "pango", 
+    "cairo", 
+    "alsa-lib"
+]
 
-if IS_RAILWAY:
-    CHROME_PATH = "/usr/bin/chromium" # Standard Linux path
-else:
-    CHROME_PATH = r'C:\Program Files\Google\Chrome\Application\chrome.exe'
+[phases.build]
+# Standard build command to install Python dependencies
+cmds = ["pip install -r requirements.txt"]
 
-# In your hard_reset() or ChromiumOptions:
-co = ChromiumOptions()
-co.set_browser_path(CHROME_PATH)
-co.set_argument('--no-sandbox') # REQUIRED for Linux containers
-co.set_argument('--disable-dev-shm-usage') # Prevents crashes in low-RAM environments
-co.headless(True)
+[start]
+# Force the bot to run with optimized memory management
+cmd = "python bot.py"
+
+[variables]
+# Forces Chrome to use the headless mode environment correctly in Linux
+CHROME_BIN = "/usr/bin/chromium"
+PYTHONUNBUFFERED = "1"
