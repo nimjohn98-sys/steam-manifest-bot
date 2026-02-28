@@ -1,52 +1,65 @@
 import discord
 from discord.ext import commands
-import requests
+import cloudscraper
 import io
+import requests
 
-# Setup
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# This is where you would put your RAW GitHub link (click 'Raw' on GitHub to get it)
+GITHUB_CODE_URL "https://github.com/nimjohn98-sys/steam-manifest-bot/blob/main/bot.py"
+
+def download_manifest(app_id):
+    """Uses cloudscraper to bypass Cloudflare/Bot protection."""
+    scraper = cloudscraper.create_scraper()
+    url = f"https://manifest.youngzm.com/api/download/{app_id}"
+    
+    response = scraper.get(url, timeout=30)
+    
+    if response.status_code == 200 and response.content.startswith(b'PK'):
+        return response.content
+    return None
+
 @bot.event
 async def on_ready():
-    print(f"✅ Bot started as {bot.user}")
+    print(f"✅ Bot is running as {bot.user}")
 
 @bot.command()
 async def gen(ctx, app_id: str):
-    await ctx.send(f"🛰️ Requesting manifest for `{app_id}`...")
-
-    # The actual API endpoint the download button uses
-    url = f"https://manifest.youngzm.com/api/download/{app_id}"
+    await ctx.send(f"🚀 Attempting high-bypass download for `{app_id}`...")
     
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Referer": "https://manifest.youngzm.com/",
-        "Accept": "application/zip"
-    }
-
     try:
-        response = requests.get(url, headers=headers, timeout=30)
-
-        # 1. Check if the site even responded correctly
-        if response.status_code != 200:
-            await ctx.send(f"❌ Site error: Received status `{response.status_code}`. The file might not exist.")
-            return
-
-        # 2. Check if the file is a REAL ZIP (Must start with 'PK')
-        if not response.content.startswith(b'PK'):
-            await ctx.send("❌ The site sent a response, but it is NOT a valid ZIP. It is likely an HTML error page or a bot-protection screen.")
-            return
-
-        # 3. Send the valid file
-        file_data = io.BytesIO(response.content)
-        await ctx.send(
-            content=f"📦 **Manifest Found!** (AppID: {app_id})",
-            file=discord.File(file_data, filename=f"{app_id}.zip")
-        )
-
+        data = download_manifest(app_id)
+        
+        if data:
+            file_data = io.BytesIO(data)
+            await ctx.send(
+                content=f"📦 **Manifest Secured!**",
+                file=discord.File(file_data, filename=f"{app_id}.zip")
+            )
+        else:
+            await ctx.send("❌ **Bypass Failed.** The site is blocking the current method. Try `!update` to pull a fix from GitHub.")
+    
     except Exception as e:
-        await ctx.send(f"🚨 Connection error: {str(e)}")
+        await ctx.send(f"🚨 Error: {str(e)}")
 
-# Your provided token
+@bot.command()
+async def update(ctx):
+    """Fetches new logic from GitHub if the current one is broken."""
+    await ctx.send("🔄 Checking GitHub for a logic update...")
+    try:
+        r = requests.get(GITHUB_CODE_URL)
+        if r.status_code == 200:
+            # This 'exec' runs the code fetched from GitHub
+            # Note: This is powerful but dangerous—only use URLs you control!
+            exec(r.text, globals())
+            await ctx.send("✅ **Logic Updated!** The bot is now using the latest code from GitHub.")
+        else:
+            await ctx.send("❌ Could not reach GitHub repository.")
+    except Exception as e:
+        await ctx.send(f"🚨 Update Failed: {e}")
+
+# Your Token
 bot.run('MTQ3NjYwNTAxMDUwMTQzOTU0OA.GKeB4T.7DZq4z7p56d3CxnJRzM4AQ8fMWmtp8LCkdM2yg')
