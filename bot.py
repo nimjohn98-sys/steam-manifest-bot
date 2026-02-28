@@ -1,28 +1,27 @@
 import discord
 from discord.ext import commands
 import requests
+from urllib.parse import quote
 
 # --- CONFIGURATION ---
-# Note: Keep this private in the future!
-DISCORD_TOKEN = 'MTQ3NjYwNTAxMDUwMTQzOTU0OA.GKeB4T.7DZq4z7p56d3CxnJRzM4AQ8fMWmtp8LCkdM2yg'
+# IMPORTANT: Reset your token in the Discord Dev Portal since it is public!
+TOKEN = 'MTQ3NjYwNTAxMDUwMTQzOTU0OA.GKeB4T.7DZq4z7p56d3CxnJRzM4AQ8fMWmtp8LCkdM2yg'
 
-# Initialize Discord Bot
 intents = discord.Intents.default()
 intents.message_content = True 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 @bot.event
 async def on_ready():
-    print(f'✅ Bot is online!')
-    print(f'Logged in as: {bot.user.name}')
-    print('Type !appid <game name> in Discord to test.')
+    print(f'✅ Manifest Bot is online as {bot.user}')
+    print('Use !gen <game name> to start.')
 
 @bot.command()
-async def appid(ctx, *, game_name: str):
-    """Searches Steam for an App ID and Manifest info using public API."""
+async def gen(ctx, *, game_name: str):
+    """Searches Steam and provides Manifest Downloader links."""
     
-    # Steam's public search suggestion endpoint
-    search_url = f"https://store.steampowered.com/api/storesearch/?term={game_name}&l=english&cc=US"
+    # 1. Search Steam for the Game Name to get the App ID
+    search_url = f"https://store.steampowered.com/api/storesearch/?term={quote(game_name)}&l=english&cc=US"
     
     try:
         response = requests.get(search_url)
@@ -32,40 +31,50 @@ async def appid(ctx, *, game_name: str):
             await ctx.send(f"❌ No games found for `{game_name}`.")
             return
 
-        # Extract top result
+        # 2. Extract top result data
         game = data['items'][0]
         name = game['name']
-        game_id = game['id']
-        price = game.get('price', {}).get('final', 'Free/Unknown')
-        
-        # Convert price from cents if it's a number
-        if isinstance(price, int):
-            price = f"${price / 100:.2f}"
+        app_id = game['id']
+        img = game.get('tiny_image')
 
-        # Build the response embed
+        # 3. Construct the Manifest Downloader Link
+        # This points to the specific URL you requested
+        manifest_url = f"https://manifest.youngzm.com/#/{app_id}"
+        steamdb_url = f"https://steamdb.info/app/{app_id}/depots/"
+
+        # 4. Create the Discord Embed
         embed = discord.Embed(
-            title=name, 
-            url=f"https://store.steampowered.com/app/{game_id}",
-            color=discord.Color.blue()
+            title=name,
+            description=f"Manifest and Depot tools for App ID: `{app_id}`",
+            color=discord.Color.gold()
         )
-        embed.add_field(name="App ID", value=f"`{game_id}`", inline=True)
-        embed.add_field(name="Current Price", value=f"{price}", inline=True)
         
-        # Add a link to SteamDB for manifest/depot info
         embed.add_field(
-            name="Manifest Info", 
-            value=f"[View on SteamDB](https://steamdb.info/app/{game_id}/depots/)", 
+            name="🛠️ Manifest Tool", 
+            value=f"[**Open Manifest Downloader**]({manifest_url})", 
             inline=False
         )
         
-        if game.get('tiny_image'):
-            embed.set_thumbnail(url=game['tiny_image'])
-            
-        embed.set_footer(text="Data fetched via Steam Storefront API")
+        embed.add_field(
+            name="📊 SteamDB Reference", 
+            value=f"[View Depots on SteamDB]({steamdb_url})", 
+            inline=False
+        )
+        
+        embed.add_field(
+            name="💻 Console Command",
+            value=f"```download_depot {app_id} <depot_id> <manifest_id>```",
+            inline=False
+        )
+
+        if img:
+            embed.set_thumbnail(url=img)
+
+        embed.set_footer(text="Powered by manifest.youngzm.com")
 
         await ctx.send(embed=embed)
 
     except Exception as e:
-        await ctx.send(f"⚠️ An error occurred: {e}")
+        await ctx.send(f"⚠️ Error: {e}")
 
-bot.run(DISCORD_TOKEN)
+bot.run(TOKEN)
