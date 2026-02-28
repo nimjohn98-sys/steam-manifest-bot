@@ -3,98 +3,98 @@ from discord.ext import commands
 import requests
 import io
 import os
-from github import Github  # pip install PyGithub
-from googlesearch import search  # pip install googlesearch-python
+from github import Github
+from google import genai
+from googlesearch import search
 
-# --- HARDCODED TOKENS ---
+# --- 🟢 YOUR COMPLETED CONFIGURATION 🟢 ---
 DISCORD_TOKEN = "MTQ3NjYwNTAxMDUwMTQzOTU0OA.GKeB4T.7DZq4z7p56d3CxnJRzM4AQ8fMWmtp8LCkdM2yg"
 GITHUB_TOKEN = "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"
+GEMINI_KEY = "AIzaSyBSGnbQBRfS65dN2g8GphxGA8EevxSSfzs"
 REPO_NAME = "nimjohn98-sys/steam-manifest-bot"
 LOGIC_FILE = "scraper_logic.py"
-RAW_URL = f"https://raw.githubusercontent.com/{REPO_NAME}/main/{LOGIC_FILE}"
+OWNER_ID = 1241307424196001928  # <--- YOUR ID IS NOW HARDCODED
 
+# Initialize Clients
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
+ai_client = genai.Client(api_key=GEMINI_KEY)
 
-# --- GITHUB REPAIR ENGINE ---
-def repair_code_on_github(error_type):
-    """Rewrites scraper_logic.py with a new strategy based on the error."""
+# --- GITHUB ENGINE ---
+def push_to_github(code, message="🛠️ Automated Update"):
     g = Github(GITHUB_TOKEN)
     repo = g.get_repo(REPO_NAME)
     contents = repo.get_contents(LOGIC_FILE, ref="main")
-    
-    # Strategy: If it's a 403/HTML block, we rotate the browser signature
-    new_user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-    
-    new_content = f"""
-import cloudscraper
-import requests
-
-def download_manifest(app_id):
-    scraper = cloudscraper.create_scraper(browser={{'browser': 'chrome', 'platform': 'windows'}})
-    url = f"https://manifest.youngzm.com/api/download/{{app_id}}"
-    headers = {{
-        "User-Agent": "{new_user_agent}",
-        "Referer": "https://manifest.youngzm.com/",
-        "Origin": "https://manifest.youngzm.com"
-    }}
-    r = scraper.get(url, headers=headers, timeout=30)
-    
-    # Validation: Must start with PK (ZIP header)
-    if r.status_code == 200 and r.content.startswith(b'PK'):
-        return r.content
-    raise Exception(f"Validation Failed: Received {{'HTML' if b'<!DOCTYPE' in r.content else 'Bad Data'}}")
-"""
-    repo.update_file(contents.path, f"🛠️ Auto-Fix: {error_type}", new_content, contents.sha, branch="main")
+    repo.update_file(contents.path, message, code, contents.sha, branch="main")
     return f"https://github.com/{REPO_NAME}/commit/main"
 
-# Placeholder
+# This function gets overwritten when you run !update
 def download_manifest(app_id):
-    raise Exception("Initial logic missing. Run !update.")
+    raise Exception("Brain not loaded. Type !update to sync with GitHub.")
 
 @bot.event
 async def on_ready():
-    print(f"✅ Steam Tools Bot Online: {bot.user}")
+    print(f"✅ Bot is live as {bot.user}")
 
+# --- COMMAND: !GEN (Scrape Manifest) ---
 @bot.command()
 async def gen(ctx, app_id: str):
-    status_msg = await ctx.send(f"🛰️ **Retrieving Manifest:** `{app_id}`...")
-    
+    status = await ctx.send(f"🛰️ **Connecting to Steam Tools mirror for AppID:** `{app_id}`...")
     try:
         data = download_manifest(app_id)
-        # Final check before sending
-        if not data.startswith(b'PK'):
-            raise Exception("Faulty ZIP detected (HTML or Corrupt Content)")
+        
+        # Verify it's a real ZIP (PK header) and not an HTML error page
+        if data.startswith(b'PK'):
+            await status.edit(content=f"✅ **Real Manifest Found!** Uploading for `{app_id}`...")
+            await ctx.send(file=discord.File(io.BytesIO(data), filename=f"{app_id}.zip"))
+        else:
+            raise Exception("Faulty ZIP detected (HTML/Cloudflare block).")
             
-        file_data = io.BytesIO(data)
-        await status_msg.edit(content=f"✅ **Success!** Sending real ZIP for `{app_id}`.")
-        await ctx.send(file=discord.File(file_data, filename=f"{app_id}.zip"))
-
     except Exception as e:
-        err = str(e)
-        await status_msg.edit(content=f"🚨 **Faulty File Detected!**\n**Error:** `{err}`\n🔍 **Searching for fix...**")
+        err_msg = str(e)
+        await status.edit(content=f"🚨 **Extraction Failed:** `{err_msg}`\n🔧 Initiating Self-Repair...")
         
-        # Search for fix links
-        search_results = []
-        for j in search(f"manifest.youngzm.com {err} fix", num=2, stop=2):
-            search_results.append(j)
-        
-        # NOTIFY: Modifying Code
-        await ctx.send(f"🛠️ **Self-Healing Active:** Found possible solutions. Rewriting GitHub code now...")
-        try:
-            commit_url = repair_code_on_github(err)
-            await ctx.send(f"✅ **GitHub Modified!** New logic pushed.\n**Commit:** {commit_url}\n👉 Run `!update` to apply fix.")
-        except Exception as ge:
-            await ctx.send(f"❌ Failed to rewrite GitHub: `{ge}`")
+        # Auto-Repair: Try a simple UA rotation strategy on GitHub
+        new_fix = f"import cloudscraper\ndef download_manifest(app_id):\n    s = cloudscraper.create_scraper()\n    r = s.get(f'https://manifest.youngzm.com/api/download/{{app_id}}')\n    return r.content"
+        push_to_github(new_fix, "Auto-Fix: Bypass Faulty ZIP")
+        await ctx.send("✅ **Code patched on GitHub.** Type `!update` and try again.")
 
+# --- COMMAND: !MODIFY (Talk to AI) ---
+@bot.command()
+async def modify(ctx, *, prompt: str):
+    """Tell the bot to change its own code using AI."""
+    if ctx.author.id != OWNER_ID:
+        return await ctx.send("⛔ **Permission Denied.** Only the registered owner can re-wire my brain.")
+
+    status = await ctx.send("🧠 **Gemini is thinking...**")
+    
+    # Get current logic to give AI context
+    raw_url = f"https://raw.githubusercontent.com/{REPO_NAME}/main/{LOGIC_FILE}"
+    current_code = requests.get(raw_url, headers={"Authorization": f"token {GITHUB_TOKEN}"}).text
+
+    ai_prompt = f"Current logic code:\n{current_code}\n\nTask: {prompt}\n\nReturn ONLY raw Python code for scraper_logic.py. Do not use markdown blocks."
+    
+    try:
+        # Using Gemini 3 Flash (Free Tier)
+        response = ai_client.models.generate_content(model="gemini-2.0-flash", contents=ai_prompt)
+        new_code = response.text.strip().replace("```python", "").replace("```", "")
+        
+        url = push_to_github(new_code, f"AI Mod: {prompt[:30]}")
+        await status.edit(content=f"✅ **Brain Modified!** [View Commit]({url})\n👉 **Run `!update` to go live.**")
+    except Exception as e:
+        await ctx.send(f"❌ AI Modification Error: `{e}`")
+
+# --- COMMAND: !UPDATE (Sync Logic) ---
 @bot.command()
 async def update(ctx):
-    await ctx.send("🔄 **Syncing with GitHub...**")
+    await ctx.send("🔄 **Syncing logic with GitHub...**")
     headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3.raw"}
-    r = requests.get(RAW_URL, headers=headers)
+    r = requests.get(f"https://raw.githubusercontent.com/{REPO_NAME}/main/{LOGIC_FILE}", headers=headers)
     if r.status_code == 200:
         exec(r.text, globals())
-        await ctx.send("✅ **Brain Updated.** New scraping logic is live.")
+        await ctx.send("✅ **Logic Synchronized.** You can now use `!gen`.")
+    else:
+        await ctx.send(f"❌ Failed to sync. GitHub returned `{r.status_code}`")
 
 bot.run(DISCORD_TOKEN)
