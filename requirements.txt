@@ -4,3 +4,4 @@ cloudscraper
 audioop-lts
 PyGithub
 google-genai
+googlesearch-python
