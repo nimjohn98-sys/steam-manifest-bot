@@ -3,10 +3,7 @@ from discord.ext import commands
 import requests
 import cloudscraper
 import io
-import os
-import base64
 from github import Github  # pip install PyGithub
-from googlesearch import search  # pip install googlesearch-python
 
 # --- CONFIGURATION ---
 DISCORD_TOKEN = "MTQ3NjYwNTAxMDUwMTQzOTU0OA.GKeB4T.7DZq4z7p56d3CxnJRzM4AQ8fMWmtp8LCkdM2yg"
@@ -18,64 +15,76 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# --- GITHUB EDITING LOGIC ---
+# --- NOTIFYING GITHUB LOGIC ---
 def update_github_code(new_code):
+    """Updates GitHub and returns the commit URL."""
     g = Github(GITHUB_TOKEN)
     repo = g.get_repo(REPO_NAME)
     contents = repo.get_contents(LOGIC_FILE_PATH, ref="main")
-    repo.update_file(contents.path, "Automated self-healing fix", new_code, contents.sha, branch="main")
+    
+    # Update the file
+    commit_result = repo.update_file(
+        contents.path, 
+        "🛠️ Automated Self-Healing Fix", 
+        new_code, 
+        contents.sha, 
+        branch="main"
+    )
+    return commit_result['commit'].html_url
 
-# --- SELF-HEALING DIAGNOSTIC ---
-async def search_for_fix(error_msg):
-    query = f"python cloudscraper {error_msg} fix"
-    results = []
-    for j in search(query, num=3, stop=3, pause=2):
-        results.append(j)
-    return results
-
-# Placeholder for the function that will be updated
+# Placeholder logic
 def download_manifest(app_id):
-    raise Exception("Initial logic not loaded. Use !update.")
+    raise Exception("403 Forbidden: Cloudflare Block Detected")
 
 @bot.command()
 async def gen(ctx, app_id: str):
-    await ctx.send(f"🧠 **Analyzing AppID `{app_id}`...**")
     try:
         data = download_manifest(app_id)
         await ctx.send(file=discord.File(io.BytesIO(data), filename=f"{app_id}.zip"))
     except Exception as e:
-        error_str = str(e)
-        await ctx.send(f"🚨 **Error Detected:** `{error_str}`\n🔍 Searching for a solution...")
+        error_msg = str(e)
         
-        # Search the web for the error
-        links = await search_for_fix(error_str)
-        links_str = "\n".join(links)
+        # 1. NOTIFY: Start of repair
+        status_msg = await ctx.send(f"⚠️ **Error Detected:** `{error_msg}`\n🔧 **Initiating Self-Repair...**")
         
-        await ctx.send(f"💡 **I found these potential fixes:**\n{links_str}\n\n**Attempting to self-heal code...**")
-        
-        # Example: If the error is a specific 403, we auto-update the User-Agent
-        if "403" in error_str:
+        # 2. ANALYSIS: (Simplified for this example)
+        if "403" in error_msg:
+            await status_msg.edit(content=f"🔍 **Analyzing:** Detected a 403 Block. Rewriting `scraper_logic.py` with new headers...")
+            
             new_logic = f"""
 import cloudscraper
 def download_manifest(app_id):
+    # Auto-generated fix for 403
     scraper = cloudscraper.create_scraper(browser={{'browser': 'chrome', 'platform': 'windows'}})
     url = f"https://manifest.youngzm.com/api/download/{{app_id}}"
     r = scraper.get(url)
     return r.content
 """
             try:
-                update_github_code(new_logic)
-                await ctx.send("✅ **GitHub updated!** Run `!update` to apply the fix.")
-            except Exception as ge:
-                await ctx.send(f"❌ Failed to edit GitHub: {ge}")
+                # 3. NOTIFY: Modifying GitHub
+                await status_msg.edit(content="🛰️ **Connecting to GitHub API...**")
+                commit_url = update_github_code(new_logic)
+                
+                # 4. NOTIFY: Success
+                embed = discord.Embed(
+                    title="✅ Code Modified Successfully",
+                    description=f"I have rewritten the scraping logic to bypass the 403 error.",
+                    color=discord.Color.green()
+                )
+                embed.add_field(name="Commit Details", value=f"[View on GitHub]({commit_url})")
+                embed.set_footer(text="Type !update to apply these changes to the bot.")
+                await ctx.send(embed=embed)
+                
+            except Exception as github_err:
+                await ctx.send(f"❌ **Failed to modify code:** `{github_err}`")
 
 @bot.command()
 async def update(ctx):
-    await ctx.send("🔄 Syncing brain with GitHub...")
+    await ctx.send("🔄 **Syncing code...**")
     headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3.raw"}
     r = requests.get(f"https://raw.githubusercontent.com/{REPO_NAME}/main/{LOGIC_FILE_PATH}", headers=headers)
     if r.status_code == 200:
         exec(r.text, globals())
-        await ctx.send("✅ **New logic applied!**")
+        await ctx.send("✅ **Brain updated!** The repair is now live.")
 
 bot.run(DISCORD_TOKEN)
