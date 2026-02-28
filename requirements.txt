@@ -5,3 +5,5 @@ audioop-lts
 PyGithub
 google-genai
 googlesearch-python
+curl_cffi
+beautifulsoup4
