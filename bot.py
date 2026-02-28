@@ -1,80 +1,74 @@
 import discord
 from discord.ext import commands
 import requests
-from urllib.parse import quote
+from steam.client import SteamClient
 
 # --- CONFIGURATION ---
-# IMPORTANT: Reset your token in the Discord Dev Portal since it is public!
-TOKEN = 'MTQ3NjYwNTAxMDUwMTQzOTU0OA.GKeB4T.7DZq4z7p56d3CxnJRzM4AQ8fMWmtp8LCkdM2yg'
+DISCORD_TOKEN = 'MTQ3NjYwNTAxMDUwMTQzOTU0OA.GKeB4T.7DZq4z7p56d3CxnJRzM4AQ8fMWmtp8LCkdM2yg'
 
+# Initialize Discord Bot
 intents = discord.Intents.default()
 intents.message_content = True 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
+# Initialize Steam Client (Anonymous login)
+steam_client = SteamClient()
+steam_client.anonymous_login()
+
 @bot.event
 async def on_ready():
-    print(f'✅ Manifest Bot is online as {bot.user}')
-    print('Use !gen <game name> to start.')
+    print(f'✅ Bot active: {bot.user}')
 
 @bot.command()
 async def gen(ctx, *, game_name: str):
-    """Searches Steam and provides Manifest Downloader links."""
-    
-    # 1. Search Steam for the Game Name to get the App ID
-    search_url = f"https://store.steampowered.com/api/storesearch/?term={quote(game_name)}&l=english&cc=US"
-    
+    """Fetches manifest/depot info and sends it as a file/message."""
+    await ctx.send(f"🔍 Searching Steam for `{game_name}`...")
+
+    # 1. Get App ID from Steam Store
+    search_url = f"https://store.steampowered.com/api/storesearch/?term={game_name}&l=english&cc=US"
     try:
-        response = requests.get(search_url)
-        data = response.json()
-
-        if not data.get('items'):
-            await ctx.send(f"❌ No games found for `{game_name}`.")
-            return
-
-        # 2. Extract top result data
-        game = data['items'][0]
-        name = game['name']
+        res = requests.get(search_url).json()
+        if not res.get('items'):
+            return await ctx.send("❌ Game not found.")
+        
+        game = res['items'][0]
         app_id = game['id']
-        img = game.get('tiny_image')
+        name = game['name']
 
-        # 3. Construct the Manifest Downloader Link
-        # This points to the specific URL you requested
-        manifest_url = f"https://manifest.youngzm.com/#/{app_id}"
-        steamdb_url = f"https://steamdb.info/app/{app_id}/depots/"
-
-        # 4. Create the Discord Embed
-        embed = discord.Embed(
-            title=name,
-            description=f"Manifest and Depot tools for App ID: `{app_id}`",
-            color=discord.Color.gold()
-        )
+        # 2. Fetch Product Info from Steam (Headless)
+        # This gets the actual technical data usually seen on SteamDB
+        app_info = steam_client.get_product_info(apps=[app_id])
         
-        embed.add_field(
-            name="🛠️ Manifest Tool", 
-            value=f"[**Open Manifest Downloader**]({manifest_url})", 
-            inline=False
-        )
+        if not app_info or 'apps' not in app_info:
+            return await ctx.send("❌ Could not fetch technical manifest data.")
+
+        depots = app_info['apps'][app_id].get('depots', {})
         
-        embed.add_field(
-            name="📊 SteamDB Reference", 
-            value=f"[View Depots on SteamDB]({steamdb_url})", 
-            inline=False
-        )
-        
-        embed.add_field(
-            name="💻 Console Command",
-            value=f"```download_depot {app_id} <depot_id> <manifest_id>```",
-            inline=False
-        )
+        manifest_data = f"MANIFEST DATA FOR: {name} (AppID: {app_id})\n"
+        manifest_data += "="*40 + "\n\n"
 
-        if img:
-            embed.set_thumbnail(url=img)
+        found_depots = False
+        for d_id, d_info in depots.items():
+            if d_id.isdigit():
+                manifest = d_info.get('manifests', {}).get('public', 'N/A')
+                if manifest != 'N/A':
+                    found_depots = True
+                    manifest_data += f"Depot ID: {d_id}\n"
+                    manifest_data += f"Manifest: {manifest}\n"
+                    manifest_data += f"Command: download_depot {app_id} {d_id} {manifest}\n"
+                    manifest_data += "-"*20 + "\n"
 
-        embed.set_footer(text="Powered by manifest.youngzm.com")
+        if not found_depots:
+            return await ctx.send(f"❌ No public manifests found for {name}.")
 
-        await ctx.send(embed=embed)
+        # 3. Create a temporary text file and send it
+        with open("manifest_info.txt", "w", encoding="utf-8") as f:
+            f.write(manifest_data)
+
+        file = discord.File("manifest_info.txt", filename=f"{name}_manifests.txt")
+        await ctx.send(content=f"✅ Here is the manifest data for **{name}**:", file=file)
 
     except Exception as e:
-        await ctx.send(f"⚠️ Error: {e}")
+        await ctx.send(f"⚠️ Error: {str(e)}")
 
-bot.run(TOKEN)
+bot.run(DISCORD_TOKEN)
