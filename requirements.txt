@@ -1,4 +1,3 @@
 discord.py
-DrissionPage
 requests
-PyGithub
+steam[client]
