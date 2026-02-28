@@ -10,20 +10,17 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 
-# --- STEAM STORE SEARCH ---
 def get_steam_id(query):
+    """Instant search via Steam API"""
     if query.isdigit(): return query
     url = f"https://store.steampowered.com/api/storesearch/?term={query}&l=english&cc=US"
     try:
         r = requests.get(url, timeout=5)
         items = r.json().get('items', [])
-        if items: 
-            return str(items[0]['id'])
-    except:
-        pass
+        if items: return str(items[0]['id'])
+    except: pass
     return None
 
-# --- BROWSER ENGINE ---
 class FastBrowser:
     def __init__(self):
         co = ChromiumOptions()
@@ -40,35 +37,38 @@ class FastBrowser:
         self.page = ChromiumPage(co)
         self.page.set.load_strategy.eager() 
         self.lock = asyncio.Lock()
-        
-        # Pre-load the site once
         self.page.get(TARGET_SITE)
 
     def run_gen(self, app_id):
-        # Use absolute paths to prevent Windows folder confusion
-        work_dir = os.path.abspath(f"tmp_{app_id}_{int(time.time())}")
+        # Unique folder for this specific request
+        job_id = int(time.time())
+        work_dir = os.path.abspath(f"work_{app_id}_{job_id}")
         os.makedirs(work_dir, exist_ok=True)
-        self.page.set.download_path(work_dir)
         
+        self.page.set.download_path(work_dir)
+        # Direct JS injection for speed
         self.page.run_js(f'document.getElementById("appId").value = "{app_id}";')
         self.page.run_js('downloadManifest();')
 
         final_path = None
-        # Check every 0.2s for up to 30 seconds
-        for _ in range(150): 
+        for _ in range(100): # 20 second timeout
             time.sleep(0.2)
+            # Find the zip, but ignore partial downloads
+            zips = [f for f in glob.glob(os.path.join(work_dir, "*.zip")) 
+                    if not f.endswith('.crdownload') and not f.endswith('.tmp')]
             
-            # 1. If Chrome is still downloading, wait.
-            if glob.glob(os.path.join(work_dir, "*.crdownload")) or glob.glob(os.path.join(work_dir, "*.tmp")):
-                continue
-                
-            # 2. If the pure .zip is here, the download is completely finished.
-            zips = glob.glob(os.path.join(work_dir, "*.zip"))
             if zips:
-                final_path = os.path.abspath(f"Manifest_{app_id}.zip")
-                shutil.move(zips[0], final_path)
-                break # Exit the loop immediately
+                time.sleep(1.5) # Critical pause for Windows file release
+                dest_path = os.path.abspath(f"Manifest_{app_id}_{job_id}.zip")
+                try:
+                    shutil.move(zips[0], dest_path)
+                    final_path = dest_path
+                    break
+                except Exception as e:
+                    print(f"File move failed, retrying: {e}")
+                    continue
         
+        # Cleanup the temp work folder
         shutil.rmtree(work_dir, ignore_errors=True)
         return final_path
 
@@ -77,43 +77,49 @@ engine = None
 @bot.command(name='gen')
 async def gen(ctx, *, query: str = None):
     if not query: 
-        return await ctx.send("❓ Give me a name (e.g. `!gen Elden Ring`)")
+        return await ctx.send(f"❓ {ctx.author.mention}, please provide a game name.")
     
     app_id = get_steam_id(query)
     if not app_id: 
-        return await ctx.send(f"❌ Steam couldn't find a game matching `{query}`.")
+        return await ctx.send(f"❌ {ctx.author.mention}, couldn't find ID for `{query}`.")
 
-    msg = await ctx.send(f"🚀 **Fetching Manifest for ID:** `{app_id}`...")
+    msg = await ctx.send(f"🚀 {ctx.author.mention}, manifesting ID: `{app_id}`...")
     
     async with engine.lock:
         start = time.perf_counter()
         file_path = await asyncio.to_thread(engine.run_gen, app_id)
         end = time.perf_counter()
 
-    if file_path:
-        # Check file size before trying to upload
-        file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
-        if file_size_mb > 25:
-            await msg.edit(content=f"❌ **Error:** The manifest is {file_size_mb:.1f}MB. Discord bots can only upload files up to 25MB.")
+    if file_path and os.path.exists(file_path):
+        size = os.path.getsize(file_path)
+        if size > 25 * 1024 * 1024:
+            await msg.edit(content=f"⚠️ {ctx.author.mention}, file is too big for Discord (>{round(size/1048576, 1)}MB).")
             os.remove(file_path)
             return
 
-        try:
-            await msg.edit(content=f"✅ **Manifest Ready!** Uploading to Discord... (Took {round(end-start, 2)}s)")
-            await ctx.send(file=discord.File(file_path))
-        except Exception as e:
-            # If Discord rejects it, tell us exactly why
-            await ctx.send(f"❌ **Discord API Error:** Could not send the file. Details: `{e}`")
-        finally:
-            if os.path.exists(file_path):
-                os.remove(file_path)
+        # Attempt to send with retry logic
+        for attempt in range(3):
+            try:
+                await ctx.send(
+                    content=f"📦 **Manifest Complete!** {ctx.author.mention}\n**Game ID:** `{app_id}`\n**Time:** `{round(end-start, 1)}s`",
+                    file=discord.File(file_path)
+                )
+                await msg.delete()
+                break
+            except Exception as e:
+                print(f"Upload attempt {attempt+1} failed: {e}")
+                await asyncio.sleep(2)
+        
+        # Cleanup
+        await asyncio.sleep(5) # Final wait before deleting from your PC
+        if os.path.exists(file_path): os.remove(file_path)
     else:
-        await msg.edit(content="❌ The website timed out or failed to generate the zip file.")
+        await msg.edit(content=f"❌ {ctx.author.mention}, the manifest site failed to respond.")
 
 @bot.event
 async def on_ready():
     global engine
     engine = FastBrowser()
-    print(f"🔥 Online as {bot.user}")
+    print(f"🔥 Bot Active: {bot.user}")
 
 bot.run(TOKEN)
