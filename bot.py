@@ -3,125 +3,134 @@ import discord
 from discord.ext import commands
 import asyncio
 import time
-import re
+import json
 import random
 import shutil
-import glob 
-import requests 
+import glob
+import requests
 from concurrent.futures import ThreadPoolExecutor
 from DrissionPage import ChromiumPage, ChromiumOptions
 
-# --- YOUR CONFIGURATION ---
+# --- CONFIGURATION ---
 TOKEN = "MTQ3NjYwNTAxMDUwMTQzOTU0OA.GKeB4T.7DZq4z7p56d3CxnJRzM4AQ8fMWmtp8LCkdM2yg"
 TARGET_SITE = "https://manifest.youngzm.com/"
-
-# Standard Windows path for Chrome
 CHROME_PATH = r'C:\Program Files\Google\Chrome\Application\chrome.exe'
+CACHE_FILE = "steam_cache.json"
 
-# Setup Discord Bot
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
-
-# Performance: Handle up to 5 users simultaneously
 executor = ThreadPoolExecutor(max_workers=5)
 
-class WindowsSentinel:
-    def get_options(self):
-        """Optimized Windows Browser Settings"""
-        co = ChromiumOptions()
-        co.set_browser_path(CHROME_PATH)
-        # Set a random port to allow multiple browsers to open at once
-        co.set_local_port(random.randint(10000, 60000))
-        co.headless(True) # Change to False if you want to watch it work
-        
-        # Windows Performance Flags
-        co.set_argument('--no-first-run')
-        co.set_argument('--force-device-scale-factor=1')
-        co.set_argument('--disable-infobars')
-        return co
 
-    def resolve_appid(self, name):
-        """Fast AppID lookup using Steam API"""
-        if name.isdigit(): return name
+class SteamResolver:
+    def __init__(self):
+        self.app_list_cache = []
+        self.headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+        self.load_local_cache()
+
+    def load_local_cache(self):
+        """Load from disk if the API fails"""
+        if os.path.exists(CACHE_FILE):
+            try:
+                with open(CACHE_FILE, 'r', encoding='utf-8') as f:
+                    self.app_list_cache = json.load(f)
+                print(f"📦 Loaded {len(self.app_list_cache)} games from local cache.")
+            except:
+                pass
+
+    def refresh_cache(self):
+        """Fetch official list and save locally"""
         try:
-            url = f"https://store.steampowered.com/api/storesearch/?term={name}"
-            r = requests.get(url, timeout=5)
-            data = r.json()
-            if data['items']:
-                return str(data['items'][0]['id'])
-        except Exception:
-            return None
+            url = "https://api.steampowered.com/ISteamApps/GetAppList/v2/"
+            r = requests.get(url, headers=self.headers, timeout=15)
+            if r.status_code == 200 and "applist" in r.text:
+                data = r.json()
+                self.app_list_cache = data.get('applist', {}).get('apps', [])
+                with open(CACHE_FILE, 'w', encoding='utf-8') as f:
+                    json.dump(self.app_list_cache, f)
+                print(f"✅ Cache updated: {len(self.app_list_cache)} games.")
+                return True
+        except Exception as e:
+            print(f"⚠️ API Fetch failed: {e}. Using local cache.")
+        return False
+
+    def get_id(self, query):
+        if not query: return None
+        if query.isdigit(): return query
+
+        query_clean = query.lower().replace(" ", "")
+        # Try exact match first
+        for app in self.app_list_cache:
+            if app['name'].lower() == query.lower():
+                return str(app['appid'])
+        # Try partial match
+        for app in self.app_list_cache:
+            if query_clean in app['name'].lower().replace(" ", ""):
+                return str(app['appid'])
         return None
 
-engine = WindowsSentinel()
+
+resolver = SteamResolver()
+
 
 def process_request(query):
-    """The Heavy-Lifting Worker Function"""
-    app_id = engine.resolve_appid(query)
+    app_id = resolver.get_id(query)
     if not app_id:
-        return {"error": "Could not find an AppID for that game."}
+        return {"error": f"Game '{query}' not found. Try the AppID number instead."}
 
-    # Unique folder for this specific download
     job_id = random.randint(1000, 9999)
-    work_dir = os.path.join(os.getcwd(), f"temp_job_{app_id}_{job_id}")
+    work_dir = os.path.join(os.getcwd(), f"temp_{app_id}_{job_id}")
     os.makedirs(work_dir, exist_ok=True)
 
-    # Initialize Browser
-    page = ChromiumPage(engine.get_options())
+    co = ChromiumOptions().set_browser_path(CHROME_PATH).headless(True)
+    co.set_argument('--no-first-run')
+    page = ChromiumPage(co)
     page.set.download_path(work_dir)
 
     try:
         page.get(TARGET_SITE)
-        
-        # Fast Javascript Injection
         page.run_js(f'document.getElementById("appId").value = "{app_id}";')
         page.run_js('downloadManifest();')
 
-        # Poll for the ZIP file (max 60 seconds)
-        for _ in range(120):
+        for _ in range(120):  # 60 sec wait
             time.sleep(0.5)
-            # Find any .zip file that isn't currently downloading (.crdownload)
             zips = [f for f in glob.glob(os.path.join(work_dir, "*.zip")) if not f.endswith('.crdownload')]
             if zips:
-                final_zip = os.path.join(os.getcwd(), f"Manifest_{app_id}.zip")
-                shutil.move(zips[0], final_zip)
-                return {"path": final_zip, "id": app_id}
-        
-        return {"error": "Timed out waiting for the website to generate the ZIP."}
-
+                final_path = os.path.join(os.getcwd(), f"Manifest_{app_id}.zip")
+                shutil.move(zips[0], final_path)
+                return {"path": final_path, "id": app_id}
+        return {"error": "Website timed out generating the file."}
     except Exception as e:
         return {"error": f"Browser Error: {str(e)}"}
     finally:
-        page.quit() # Always close browser to save RAM
-        shutil.rmtree(work_dir, ignore_errors=True) # Cleanup temp folder
+        page.quit()
+        shutil.rmtree(work_dir, ignore_errors=True)
+
 
 @bot.command(name='gen')
 async def generate(ctx, *, query: str = None):
     if not query:
-        await ctx.send("❓ Please provide a game name. Example: `!gen Elden Ring`")
-        return
+        return await ctx.send("❓ Usage: `!gen Game Name` or `!gen AppID`")
 
-    status_msg = await ctx.send(f"🔍 **Searching:** `{query}`... (Allocating Windows Resources)")
-
-    # Run the heavy processing in a separate thread so Discord doesn't lag
+    msg = await ctx.send(f"🔍 **Searching:** `{query}`...")
     loop = asyncio.get_running_loop()
-    result = await loop.run_in_executor(executor, process_request, query)
+    res = await loop.run_in_executor(executor, process_request, query)
 
-    if "error" in result:
-        await status_msg.edit(content=f"❌ **Error:** {result['error']}")
+    if "error" in res:
+        await msg.edit(content=f"❌ **Error:** {res['error']}")
     else:
-        await status_msg.edit(content=f"📦 **Success!** Found AppID: `{result['id']}`. Sending manifest...")
-        await ctx.send(file=discord.File(result['path']))
-        
-        # Clean up the final file after sending
-        if os.path.exists(result['path']):
-            os.remove(result['path'])
+        await msg.edit(content=f"📦 **Success!** ID: `{res['id']}`. Sending...")
+        await ctx.send(file=discord.File(res['path']))
+        if os.path.exists(res['path']): os.remove(res['path'])
+
 
 @bot.event
 async def on_ready():
-    print(f'✅ Logged in as {bot.user.name}')
-    print(f'🖥️ Windows Engine Status: ONLINE')
+    print(f"Logged in as {bot.user}")
+    resolver.refresh_cache()
 
-if __name__ == "__main__":
-    bot.run(TOKEN)
+
+bot.run(TOKEN)
