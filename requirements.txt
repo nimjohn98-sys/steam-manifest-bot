@@ -2,5 +2,5 @@ discord.py
 requests
 cloudscraper
 audioop-lts
-python-dotenv
-
+PyGithub
+googlesearch-python
