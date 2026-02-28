@@ -1,0 +1,15 @@
+# --- RAILWAY ADAPTATION ---
+# This checks if it's on Linux (Railway) or Windows (Your PC)
+IS_RAILWAY = os.getenv('RAILWAY_ENVIRONMENT') is not None
+
+if IS_RAILWAY:
+    CHROME_PATH = "/usr/bin/chromium" # Standard Linux path
+else:
+    CHROME_PATH = r'C:\Program Files\Google\Chrome\Application\chrome.exe'
+
+# In your hard_reset() or ChromiumOptions:
+co = ChromiumOptions()
+co.set_browser_path(CHROME_PATH)
+co.set_argument('--no-sandbox') # REQUIRED for Linux containers
+co.set_argument('--disable-dev-shm-usage') # Prevents crashes in low-RAM environments
+co.headless(True)
