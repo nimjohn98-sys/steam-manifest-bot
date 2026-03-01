@@ -1,77 +1,86 @@
+
 import discord
 from discord.ext import commands
 import asyncio
 from playwright.async_api import async_playwright
 import io
 
-# REPLACE THIS if it stops working (Discord often resets public tokens)
+# Secure your token - Discord will likely revoke this one since it's public
 TOKEN = 'MTQ3NjYwNTAxMDUwMTQzOTU0OA.GKeB4T.7DZq4z7p56d3CxnJRzM4AQ8fMWmtp8LCkdM2yg'
 
 intents = discord.Intents.default()
 intents.message_content = True 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-async def get_manifest_file(app_id):
+@bot.event
+async def on_ready():
+    print(f'✅ Bot active: {bot.user}')
+
+@bot.command()
+async def snap(ctx, app_id: str):
+    """Takes a screenshot of the search page to debug issues."""
+    await ctx.send(f"📸 Capturing browser state for App ID `{app_id}`...")
+    
     async with async_playwright() as p:
-        # Launch browser
+        browser = await p.chromium.launch(headless=True)
+        page = await browser.new_page()
+        
+        try:
+            await page.goto("https://manifest.youngzm.com/", wait_until="networkidle")
+            
+            # Perform the search so we see the results in the screenshot
+            await page.fill("input[type='text']", app_id)
+            await page.keyboard.press("Enter")
+            await page.wait_for_timeout(2000) # Give it a moment to render results
+            
+            # Take screenshot
+            screenshot_bytes = await page.screenshot(full_page=True)
+            await browser.close()
+            
+            # Send to Discord
+            data = io.BytesIO(screenshot_bytes)
+            await ctx.send(file=discord_file := discord.File(data, filename="debug_snap.png"))
+            
+        except Exception as e:
+            await ctx.send(f"❌ Failed to take screenshot: {e}")
+            await browser.close()
+
+@bot.command()
+async def gen(ctx, app_id: str):
+    """The main command to download the manifest."""
+    msg = await ctx.send(f"⚡ Searching for `{app_id}`...")
+    
+    async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(accept_downloads=True)
         page = await context.new_page()
         
         try:
-            # 1. Load the site
             await page.goto("https://manifest.youngzm.com/", wait_until="domcontentloaded")
-
-            # 2. Type into the search bar
-            # The site uses a standard search input
             await page.fill("input[type='text']", app_id)
             await page.keyboard.press("Enter")
+            await page.wait_for_timeout(1500)
 
-            # 3. Click the Download Button
-            # We look for a link or button that contains the download icon or text
-            # Based on the site's structure, we target the first 'download' action
-            download_button_selector = "a[title*='Download'], .download-btn, i.fa-download"
-            
-            # Wait briefly for the search result to filter the list
-            await page.wait_for_timeout(1000) 
-
-            # Start waiting for the download event before clicking
+            # Look for the download trigger
+            # This targets the 'download' icon or link text specifically
             async with page.expect_download() as download_info:
-                # Click the first available download link for that App ID
-                await page.click(f"text={app_id}") # Clicks the file name first to select
-                await page.click(download_button_selector) # Then clicks download
+                # We click the specific entry for the app_id
+                await page.click(f"text={app_id}") 
+                # Then click the actual download button/icon that appears
+                await page.click("i.fa-download, a[title*='Download']")
             
             download = await download_info.value
+            path = await download.path()
             
-            # 4. Stream the file into memory
-            file_path = await download.path()
-            with open(file_path, "rb") as f:
-                content = f.read()
+            with open(path, "rb") as f:
+                discord_file = discord.File(io.BytesIO(f.read()), filename=f"{app_id}.zip")
+                await msg.edit(content=f"✅ Found manifest for `{app_id}`!")
+                await ctx.send(file=discord_file)
             
             await browser.close()
-            return content
 
         except Exception as e:
-            print(f"Error: {e}")
+            await msg.edit(content=f"❌ Error: Could not find or download `{app_id}`. Use `!snap {app_id}` to see why.")
             await browser.close()
-            return None
-
-@bot.command()
-async def gen(ctx, app_id: str):
-    msg = await ctx.send(f"⚡ **Processing:** Searching for `{app_id}` and clicking download...")
-    
-    file_bytes = await get_manifest_file(app_id)
-    
-    if file_bytes:
-        data = io.BytesIO(file_bytes)
-        # Check if the file is valid (not an empty error page)
-        if len(file_bytes) < 500:
-            await msg.edit(content=f"❌ The file for `{app_id}` appears to be empty or restricted on the site.")
-        else:
-            discord_file = discord.File(data, filename=f"{app_id}.zip")
-            await msg.edit(content=f"✅ **Success!** Downloaded manifest for `{app_id}`.")
-            await ctx.send(file=discord_file)
-    else:
-        await msg.edit(content=f"❌ **Failed:** Could not find the download button for `{app_id}`.")
 
 bot.run(TOKEN)
