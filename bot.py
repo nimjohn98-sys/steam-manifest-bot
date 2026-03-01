@@ -7,6 +7,7 @@ import requests
 # --- CONFIG ---
 TOKEN = 'MTQ3NjYwNTAxMDUwMTQzOTU0OA.GKeB4T.7DZq4z7p56d3CxnJRzM4AQ8fMWmtp8LCkdM2yg'
 
+# Standard intents
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
@@ -23,28 +24,36 @@ def get_steam_data(appid):
 
 @bot.event
 async def on_ready():
-    print(f'🚀 SteamTools Bot is online: {bot.user}')
+    # Only print this once to confirm 1 instance is running
+    print(f'🚀 Bot Online: {bot.user} (ID: {bot.user.id})')
+
+# --- PREVENT DUPLICATES ---
+@bot.event
+async def on_message(message):
+    # If you have an on_message event, you MUST include this line 
+    # or commands will trigger twice or not at all.
+    if message.author == bot.user:
+        return
+    await bot.process_commands(message)
 
 # --- ERROR HANDLER ---
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandOnCooldown):
-        # Convert seconds to hours/minutes for the user
         remaining = error.retry_after
-        hours = int(remaining // 3600)
-        minutes = int((remaining % 3600) // 60)
-        await ctx.send(f"⏳ **Daily Limit Reached!** You can generate more files in **{hours}h {minutes}m**.")
+        await ctx.send(f"⏳ **Limit Reached!** Try again in {int(remaining//3600)}h {int((remaining%3600)//60)}m.", delete_after=10)
+    elif isinstance(error, commands.CommandNotFound):
+        pass # Ignore unknown commands to keep chat clean
     else:
-        raise error
+        print(f"Error: {error}")
 
+# --- THE COMMAND ---
 @bot.command()
-# 4 uses, per 86400 seconds (24 hours), per user
 @commands.cooldown(4, 86400, commands.BucketType.user)
 async def gen(ctx, appid: str):
     """Generates the .lua and .manifest files for SteamTools."""
     if not appid.isdigit():
-        await ctx.send("❌ Please enter a valid AppID.")
-        # Reset the cooldown since the command failed
+        await ctx.send("❌ Valid AppID required.", delete_after=5)
         ctx.command.reset_cooldown(ctx)
         return
 
@@ -62,6 +71,7 @@ async def gen(ctx, appid: str):
         zip_buffer.seek(0)
         file = discord.File(fp=zip_buffer, filename=f"SteamTools_{appid}.zip")
         
-        await ctx.send(f"🛠️ **SteamTools Files for {game_name}** (AppID: {appid})", file=file)
+        # Only sends once
+        await ctx.send(f"🛠️ **SteamTools Files for {game_name}**", file=file)
 
 bot.run(TOKEN)
