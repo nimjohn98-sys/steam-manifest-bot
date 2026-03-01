@@ -7,3 +7,5 @@ google-genai
 googlesearch-python
 curl_cffi
 beautifulsoup4
+playwright
+beautifulsoup4
