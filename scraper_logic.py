@@ -1,73 +1,46 @@
-import time
-import random
-import cloudscraper
-from curl_cffi import requests
-from datetime import datetime
+import asyncio
+from playwright.async_api import async_playwright
 
-class NuclearSteamBot:
-    def __init__(self, app_id):
-        self.app_id = app_id
-        self.url = f"https://raw.githubusercontent.com/SteamTools-Team/GameList/main/manifest/{app_id}.lua"
-        self.log_file = "learning_log.txt"
-        # Proxy format (Optional): 'http://user:pass@host:port'
-        self.proxy = None 
+async def download_steam_manifest(app_id):
+    # Change this to the actual page where the button is
+    url = f"https://steamdb.info/app/{app_id}/manifests/" 
 
-    def _log(self, status, msg=""):
-        t = datetime.now().strftime("%H:%M:%S")
-        with open(self.log_file, "a") as f:
-            f.write(f"[{t}] {status}: {msg}\n")
+    async with async_playwright() as p:
+        # Launch a real browser (Headless=False lets you see it happen)
+        browser = await p.chromium.launch(headless=False) 
+        context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36")
+        page = await context.new_page()
 
-    def solve_and_fetch(self):
-        print(f"🌀 Revamping strategy for AppID: {self.app_id}")
-        
-        # Strategy 1: The Cloudscraper Bypass (Handles JS Challenges)
+        print(f"🚀 Navigating to {url}...")
+        await page.goto(url, wait_until="networkidle")
+
         try:
-            print("🚀 Strategy 1: Cloudscraper JS-Bypass...")
-            scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False})
-            resp = scraper.get(self.url, timeout=20)
+            # --- THE CLICK LOGIC ---
+            # This searches for a button that says 'Download' or has the right class
+            # You can change 'text="Download"' to match the actual button text
+            print("🖱️ Locating download button...")
             
-            if resp.status_code == 200:
-                self._log("SUCCESS", "Bypassed via Cloudscraper")
-                return resp.text
+            # Wait for the button to be visible
+            button = page.locator('button:has-text("Download"), a:has-text("Download")').first
+            
+            # Record the download event
+            async with page.expect_download() as download_info:
+                await button.click()
+                print("✅ Button clicked!")
+            
+            download = await download_info.value
+            path = f"./{app_id}_manifest.lua"
+            await download.save_as(path)
+            print(f"💾 File saved successfully to: {path}")
+
         except Exception as e:
-            print(f"⚠️ Strategy 1 failed. Moving to Nuclear Fix...")
+            print(f"❌ Error during click/download: {e}")
+            # If it fails, take a screenshot so we can see why
+            await page.screenshot(path="error_screen.png")
+            print("📸 Error screenshot saved as 'error_screen.png'")
 
-        # Strategy 2: Nuclear TLS Impersonation (Handles Handshake blocks)
-        identities = ["chrome120", "safari15_5", "edge101", "chrome110"]
-        for identity in identities:
-            print(f"🔄 Strategy 2: Rotating to {identity}...")
-            try:
-                # Reset session to clear tracking cookies
-                with requests.Session() as s:
-                    proxies = {"http": self.proxy, "https": self.proxy} if self.proxy else None
-                    r = s.get(self.url, impersonate=identity, proxies=proxies, timeout=25)
-
-                    if r.status_code == 200:
-                        self._log("SUCCESS", f"Unblocked with {identity}")
-                        return r.text
-                    
-                    if r.status_code == 404:
-                        print("🛑 404: This AppID manifest does not exist.")
-                        return None
-                    
-                    if r.status_code in [403, 429]:
-                        print(f"❌ Still blocked ({r.status_code}). Learning... waiting...")
-                        time.sleep(random.uniform(5, 10)) # Real human jitter
-                        
-            except Exception as e:
-                self._log("ERROR", str(e))
-        
-        return None
+        await browser.close()
 
 if __name__ == "__main__":
-    APP_ID = "367520" # Change to your ID
-    bot = NuclearSteamBot(APP_ID)
-    content = bot.solve_and_fetch()
-
-    if content:
-        with open(f"{APP_ID}.lua", "w", encoding="utf-8") as f:
-            f.write(content)
-        print(f"✅ FIXED: {APP_ID}.lua saved successfully!")
-    else:
-        print("\n💥 ALL BYPASSES FAILED. The site has likely banned your IP.")
-        print("💡 Solution: Add a proxy to the 'self.proxy' line in the code.")
+    APP_ID = "367520" # Replace with your AppID
+    asyncio.run(download_steam_manifest(APP_ID))
