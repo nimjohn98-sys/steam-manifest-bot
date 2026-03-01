@@ -1,82 +1,85 @@
 import discord
 from discord.ext import commands
-import requests
+import zipfile
 import io
-import urllib.parse
+import requests
 
-# 1. IMPORTANT: RESET YOUR TOKEN in the Discord Developer Portal
+# --- CONFIG ---
+# Replace this with your NEW token after you reset it!
 TOKEN = 'MTQ3NjYwNTAxMDUwMTQzOTU0OA.GKeB4T.7DZq4z7p56d3CxnJRzM4AQ8fMWmtp8LCkdM2yg'
 
 intents = discord.Intents.default()
-intents.message_content = True 
+intents.message_content = True
+bot = commands.Bot(command_prefix='!', intents=intents)
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+def get_game_name(appid):
+    """Fetches the official game name from Steam API for the folder path."""
+    try:
+        url = f"https://store.steampowered.com/api/appdetails?appids={appid}"
+        response = requests.get(url).json()
+        if response[str(appid)]['success']:
+            return response[str(appid)]['data']['name']
+    except:
+        return "Steam Game"
+    return "Steam Game"
 
-# Headers to bypass bot detection
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Referer": "https://manifest.youngzm.com/"
-}
+def generate_acf(appid, name):
+    """Formats the .acf manifest content."""
+    return f""" "AppState"
+{{
+    "appid" "{appid}"
+    "Universe" "1"
+    "name" "{name}"
+    "StateFlags" "4"
+    "installdir" "{name}"
+    "LastUpdated" "0"
+    "UpdateResult" "0"
+    "SizeOnDisk" "0"
+    "buildid" "0"
+    "LastOwner" "0"
+    "BytesToDownload" "0"
+    "BytesDownloaded" "0"
+    "AutoUpdateBehavior" "0"
+    "AllowOtherDownloadsWhileRunning" "0"
+    "ScheduledAutoUpdate" "0"
+    "InstalledDepots"
+    {{
+    }}
+}}
+"""
 
 @bot.event
 async def on_ready():
-    print(f'✅ Bot Online: {bot.user.name}')
-    print('--- KILL ALL OTHER PYTHON INSTANCES TO STOP TRIPLE RESPONSES ---')
+    print(f'🚀 Manifest Bot is online as {bot.user}')
 
 @bot.command()
-async def snap(ctx, app_id: str):
-    """Takes a screenshot using an external API to avoid Chromium errors."""
-    await ctx.send(f"📸 Generating screenshot for `{app_id}`...")
+async def gen(ctx, appid: str):
+    """Usage: !gen 105600"""
+    if not appid.isdigit():
+        await ctx.send("❌ Error: Please provide a numeric AppID.")
+        return
 
-    # We use thum.io to take the picture so you don't need Chromium installed
-    target_site = f"https://manifest.youngzm.com/?search={app_id}"
-    encoded_url = urllib.parse.quote(target_site)
-    snap_url = f"https://image.thum.io/get/width/1200/crop/800/wait/3000/{target_site}"
-
-    try:
-        response = requests.get(snap_url, stream=True, timeout=20)
-        if response.status_code == 200:
-            data = io.BytesIO(response.content)
-            await ctx.send(file=discord.File(data, filename="screenshot.png"))
-        else:
-            await ctx.send("❌ Screenshot service failed. The site might be blocking it.")
-    except Exception as e:
-        await ctx.send(f"⚠️ Snap Error: `{e}`")
-
-@bot.command()
-async def gen(ctx, app_id: str):
-    """The main command to download the manifest."""
-    if ctx.author.bot: return
-    msg = await ctx.send(f"🛰️ Accessing database for `{app_id}`...")
-
-    try:
-        # Search the API
-        search_url = "https://manifest.youngzm.com/api/v3/search"
-        r = requests.post(search_url, json={"keyword": app_id}, headers=HEADERS, timeout=10)
+    await ctx.mention
+    async with ctx.typing():
+        game_name = get_game_name(appid)
+        manifest_content = generate_acf(appid, game_name)
         
-        # This handles the 'line 1 column 1' error by checking if response is actually JSON
-        if "application/json" not in r.headers.get("Content-Type", ""):
-            return await msg.edit(content="⚠️ Error: The website sent back a webpage instead of data. They might be blocking the bot.")
-
-        data = r.json()
-        items = data.get('data', {}).get('items', [])
+        # Prepare the ZIP file in memory
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+            zip_file.writestr(f"appmanifest_{appid}.acf", manifest_content)
         
-        # Filter for the ZIP file
-        target = next((i for i in items if i.get('name', '').endswith('.zip')), None)
+        zip_buffer.seek(0)
         
-        if not target:
-            return await msg.edit(content=f"❌ No ZIP file found for `{app_id}`. Use `!snap {app_id}` to check the site.")
-
-        # Download the file
-        file_id = target.get('id')
-        dl_url = f"https://manifest.youngzm.com/api/v3/file/download/{file_id}"
-        file_data = requests.get(dl_url, headers=HEADERS, timeout=30).content
+        # Send to user
+        file = discord.File(fp=zip_buffer, filename=f"Terraria_Manifest_{appid}.zip")
+        embed = discord.Embed(
+            title="✅ Manifest Generated",
+            description=f"**Game:** {game_name}\n**AppID:** {appid}",
+            color=0x2ecc71
+        )
+        embed.add_field(name="Instructions", value="1. Close Steam.\n2. Drop the .acf into `steamapps/`.\n3. Restart Steam with your Tool.")
         
-        # Send to Discord
-        await msg.edit(content=f"✅ File found: `{target.get('name')}`")
-        await ctx.send(file=discord.File(io.BytesIO(file_data), filename=target.get('name')))
-
-    except Exception as e:
-        await msg.edit(content=f"⚠️ Critical Error: `{str(e)}`")
+        await ctx.send(embed=embed, file=file)
 
 bot.run(TOKEN)
