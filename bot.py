@@ -5,73 +5,89 @@ import io
 import requests
 
 # --- CONFIG ---
-TOKEN = 'MTQ3NjYwNTAxMDUwMTQzOTU0OA.GKeB4T.7DZq4z7p56d3CxnJRzM4AQ8fMWmtp8LCkdM2yg'
+# 1. Reset your token in the Discord Dev Portal and paste it here
+TOKEN = 'YOUR_NEW_TOKEN_HERE' 
 
-# Standard intents
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-def get_steam_data(appid):
+def get_game_name(appid):
+    """Fetches the official game name from Steam for the folder path."""
     try:
         url = f"https://store.steampowered.com/api/appdetails?appids={appid}"
-        r = requests.get(url).json()
-        if r[str(appid)]['success']:
-            return r[str(appid)]['data']['name']
+        response = requests.get(url).json()
+        if response and response.get(str(appid), {}).get('success'):
+            return response[str(appid)]['data']['name']
     except:
-        pass
-    return "Unknown Game"
+        return "Unknown_Game"
+    return "Unknown_Game"
 
 @bot.event
 async def on_ready():
-    # Only print this once to confirm 1 instance is running
-    print(f'🚀 Bot Online: {bot.user} (ID: {bot.user.id})')
+    print(f'🚀 Safe Manifest Bot is online as {bot.user}')
+    print('Commands: !search <name> | !gen <appid>')
 
-# --- PREVENT DUPLICATES ---
-@bot.event
-async def on_message(message):
-    # If you have an on_message event, you MUST include this line 
-    # or commands will trigger twice or not at all.
-    if message.author == bot.user:
-        return
-    await bot.process_commands(message)
-
-# --- ERROR HANDLER ---
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandOnCooldown):
-        remaining = error.retry_after
-        await ctx.send(f"⏳ **Limit Reached!** Try again in {int(remaining//3600)}h {int((remaining%3600)//60)}m.", delete_after=10)
+        await ctx.send(f"⏳ Daily limit reached. Try again in {int(error.retry_after // 3600)} hours.")
     elif isinstance(error, commands.CommandNotFound):
-        pass # Ignore unknown commands to keep chat clean
+        pass 
     else:
         print(f"Error: {error}")
 
-# --- THE COMMAND ---
+@bot.command()
+async def search(ctx, *, game_name: str):
+    """Finds the AppID for a game."""
+    search_url = f"https://store.steampowered.com/api/storesearch/?term={game_name}&l=english&cc=US"
+    async with ctx.typing():
+        try:
+            r = requests.get(search_url).json()
+            if r.get('total') > 0:
+                item = r['items'][0]
+                await ctx.send(f"🔍 **Top Result:** {item['name']} | **AppID:** `{item['id']}`\nUse `!gen {item['id']}` to get the file.")
+            else:
+                await ctx.send("❌ No games found.")
+        except:
+            await ctx.send("⚠️ Steam search is currently down.")
+
 @bot.command()
 @commands.cooldown(4, 86400, commands.BucketType.user)
 async def gen(ctx, appid: str):
-    """Generates the .lua and .manifest files for SteamTools."""
+    """Generates a SAFE .acf file inside a ZIP."""
     if not appid.isdigit():
-        await ctx.send("❌ Valid AppID required.", delete_after=5)
         ctx.command.reset_cooldown(ctx)
-        return
+        return await ctx.send("❌ Please provide a numeric AppID.")
 
     async with ctx.typing():
-        game_name = get_steam_data(appid)
+        game_name = get_game_name(appid)
         
-        lua_content = f'-- Generated for SteamTools\nadd_app({appid}, "{game_name}")\n'
-        manifest_content = f'{{\n    "appmanifest": {{\n        "appid": "{appid}",\n        "name": "{game_name}",\n        "installdir": "{game_name}",\n        "StateFlags": "4"\n    }}\n}}'
-
+        # This is the EXACT format Steam uses for its own files
+        # StateFlags "4" tells Steam the game is installed and updated
+        acf_content = f""" "AppState"
+{{
+    "appid" "{appid}"
+    "Universe" "1"
+    "name" "{game_name}"
+    "StateFlags" "4"
+    "installdir" "{game_name}"
+    "LastOwner" "0"
+}}
+"""
+        # Package into a ZIP
         zip_buffer = io.BytesIO()
-        with zipfile.ZipFile(zip_buffer, "w") as zip_file:
-            zip_file.writestr(f"{appid}.lua", lua_content)
-            zip_file.writestr(f"{appid}.manifest", manifest_content)
+        with zipfile.ZipFile(zip_buffer, "w") as zf:
+            zf.writestr(f"appmanifest_{appid}.acf", acf_content)
         
         zip_buffer.seek(0)
-        file = discord.File(fp=zip_buffer, filename=f"SteamTools_{appid}.zip")
+        file = discord.File(fp=zip_buffer, filename=f"Manifest_{appid}.zip")
         
-        # Only sends once
-        await ctx.send(f"🛠️ **SteamTools Files for {game_name}**", file=file)
+        embed = discord.Embed(title="✅ Safe Manifest Generated", color=0x2ecc71)
+        embed.add_field(name="Game", value=game_name, inline=False)
+        embed.add_field(name="Install Path", value=f"`Steam/steamapps/appmanifest_{appid}.acf`", inline=False)
+        embed.set_footer(text="⚠️ IMPORTANT: Close Steam fully before moving this file!")
+        
+        await ctx.send(embed=embed, file=file)
 
 bot.run(TOKEN)
