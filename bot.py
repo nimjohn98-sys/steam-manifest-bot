@@ -6,7 +6,7 @@ import requests
 
 # --- CONFIG ---
 # 1. Reset your token in the Discord Dev Portal and paste it here
-TOKEN = 'YOUR_NEW_TOKEN_HERE' 
+TOKEN = 'MTQ3NjYwNTAxMDUwMTQzOTU0OA.GKeB4T.7DZq4z7p56d3CxnJRzM4AQ8fMWmtp8LCkdM2yg' 
 
 intents = discord.Intents.default()
 intents.message_content = True
