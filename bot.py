@@ -5,7 +5,7 @@ import io
 import requests
 
 # --- CONFIG ---
-TOKEN = 'REPLACE_WITH_YOUR_NEWLY_RESET_TOKEN'
+TOKEN = 'MTQ3NjYwNTAxMDUwMTQzOTU0OA.GKeB4T.7DZq4z7p56d3CxnJRzM4AQ8fMWmtp8LCkdM2yg'
 
 intents = discord.Intents.default()
 intents.message_content = True
