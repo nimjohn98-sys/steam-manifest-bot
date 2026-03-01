@@ -7,7 +7,7 @@ import urllib.parse
 
 # --- CONFIGURATION ---
 # 1. Reset your token in the Dev Portal and paste it here
-TOKEN = 'YOUR_NEW_RESET_TOKEN_HERE' 
+TOKEN = 'MTQ3NjYwNTAxMDUwMTQzOTU0OA.GKeB4T.7DZq4z7p56d3CxnJRzM4AQ8fMWmtp8LCkdM2yg'
 
 # 2. This prefix must be used in Discord (e.g., !search or !gen)
 COMMAND_PREFIX = '!' 
