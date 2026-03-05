@@ -1,3 +1,4 @@
 discord.py
 requests
 discord.py-self
+discord.py aiosqlite
