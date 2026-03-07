@@ -1,53 +1,90 @@
-import urllib.request
+import discord
+from discord.ext import commands
 import zipfile
-import os
+import io
+import requests
+import urllib.parse
 
-def download_and_extract(url, extract_folder='extracted_files'):
-    """Downloads a ZIP file from a reliable URL, tests it, and extracts it safely."""
-    
-    # Create the target folder if it doesn't exist
-    if not os.path.exists(extract_folder):
-        os.makedirs(extract_folder)
+# --- CONFIG ---
+TOKEN = 'MTQ3NjYwNTAxMDUwMTQzOTU0OA.GKeB4T.7DZq4z7p56d3CxnJRzM4AQ8fMWmtp8LCkdM2yg' 
 
-    # Get the filename from the URL
-    file_name = url.split('/')[-1]
-    if not file_name.endswith('.zip'):
-        file_name = 'downloaded_archive.zip'
-        
-    print(f"[*] Downloading {file_name} from official source...")
-    
-    # 1. Download the file
+intents = discord.Intents.default()
+intents.message_content = True
+bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
+
+def get_game_name(appid):
     try:
-        urllib.request.urlretrieve(url, file_name)
-        print("[+] Download complete!")
-    except Exception as e:
-        print(f"[-] Error downloading the file. Check your connection or the URL.\nDetails: {e}")
-        return
+        url = f"https://store.steampowered.com/api/appdetails?appids={appid}&filters=basic"
+        r = requests.get(url, timeout=5).json()
+        if r and r.get(str(appid), {}).get('success'):
+            return r[str(appid)]['data']['name']
+    except:
+        pass
+    return "Steam_Game"
 
-    # 2. Verify and Extract
-    print(f"[*] Testing and extracting archive...")
+@bot.event
+async def on_ready():
+    print(f'🚀 ACF Native Bot Online: {bot.user}')
+
+@bot.command()
+async def help(ctx):
+    embed = discord.Embed(title="📦 Steam ACF Generator", color=0x1f618d)
+    embed.add_field(name="Commands", value="`!search [game]`\n`!gen [appid]`", inline=False)
+    embed.add_field(name="How to use", value="1. Close Steam.\n2. Open ZIP.\n3. Drag the **steamapps** folder into your main Steam folder.\n4. Open Steam.", inline=False)
+    await ctx.send(embed=embed)
+
+@bot.command()
+async def search(ctx, *, query: str):
+    url = f"https://store.steampowered.com/api/storesearch/?term={query}&l=english&cc=US"
     try:
-        with zipfile.ZipFile(file_name, 'r') as zip_ref:
-            # Test the zip file for CRC errors before extracting
-            bad_file = zip_ref.testzip()
-            if bad_file:
-                print(f"[-] WARNING: Corrupt file detected inside the archive: {bad_file}")
-                print("[-] The archive might be faulty. Proceeding with caution...")
+        r = requests.get(url, timeout=5).json()
+        if r.get('items'):
+            game = r['items'][0]
+            await ctx.send(f"🔍 **Found:** {game['name']} | ID: `{game['id']}`")
+        else:
+            await ctx.send("❌ No game found.")
+    except:
+        await ctx.send("⚠️ Steam API busy.")
+
+@bot.command()
+@commands.cooldown(5, 86400, commands.BucketType.user)
+async def gen(ctx, appid: str):
+    if not appid.isdigit():
+        ctx.command.reset_cooldown(ctx)
+        return await ctx.send("❌ Enter a numeric ID.")
+
+    async with ctx.typing():
+        try:
+            name = get_game_name(appid)
             
-            # Extract everything
-            zip_ref.extractall(extract_folder)
-            print(f"[+] Success! All files securely extracted to the '{extract_folder}' folder.")
+            # This is the NATIVE Steam AppManifest format
+            acf_content = f""" "AppState"
+{{
+    "appid" "{appid}"
+    "Universe" "1"
+    "name" "{name}"
+    "StateFlags" "4"
+    "installdir" "{name}"
+    "LastOwner" "0"
+}}
+"""
+            # ZIP with folder structure for ZERO WORK drag-and-drop
+            zip_buffer = io.BytesIO()
+            with zipfile.ZipFile(zip_buffer, "w") as zf:
+                # We put the .acf inside 'steamapps' so you just drag the folder
+                zf.writestr(f"steamapps/appmanifest_{appid}.acf", acf_content)
             
-    except zipfile.BadZipFile:
-        print("[-] FATAL ERROR: The downloaded file is completely invalid or severely corrupted.")
-    except Exception as e:
-        print(f"[-] An unexpected error occurred: {e}")
+            zip_buffer.seek(0)
+            file = discord.File(fp=zip_buffer, filename=f"Native_ACF_{appid}.zip")
+            
+            await ctx.send(f"✅ **{name}** (ACF format). Drag 'steamapps' to your Steam folder.", file=file)
+            
+        except Exception as e:
+            await ctx.send(f"⚠️ Error creating file: {str(e)}")
 
-# ==========================================
-# HOW TO USE IT:
-# Replace the URL below with a safe, direct link to a ZIP file (like a GitHub release)
-# ==========================================
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.CommandOnCooldown):
+        await ctx.send(f"⏳ Daily limit reached (5/5). Try again in {int(error.retry_after // 3600)}h.")
 
-target_url = 'https://github.com/psf/requests/archive/refs/heads/main.zip' 
-
-download_and_extract(target_url)
+bot.run(TOKEN)
