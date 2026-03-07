@@ -24,13 +24,13 @@ def get_game_name(appid):
 
 @bot.event
 async def on_ready():
-    print(f'🚀 ACF Native Bot Online: {bot.user}')
+    print(f'🚀 ACF + Manifest Bot Online: {bot.user}')
 
 @bot.command()
 async def help(ctx):
-    embed = discord.Embed(title="📦 Steam ACF Generator", color=0x1f618d)
+    embed = discord.Embed(title="📦 Steam All-In-One Generator", color=0x27ae60)
     embed.add_field(name="Commands", value="`!search [game]`\n`!gen [appid]`", inline=False)
-    embed.add_field(name="How to use", value="1. Close Steam.\n2. Open ZIP.\n3. Drag the **steamapps** folder into your main Steam folder.\n4. Open Steam.", inline=False)
+    embed.add_field(name="Zero-Work Instructions", value="1. Close Steam.\n2. Open ZIP.\n3. Drag **steamapps** and **manifests** folders into your main Steam/Tool folder.\n4. Merge folders and restart Steam.", inline=False)
     await ctx.send(embed=embed)
 
 @bot.command()
@@ -44,7 +44,7 @@ async def search(ctx, *, query: str):
         else:
             await ctx.send("❌ No game found.")
     except:
-        await ctx.send("⚠️ Steam API busy.")
+        await ctx.send("⚠️ Steam API error.")
 
 @bot.command()
 @commands.cooldown(5, 86400, commands.BucketType.user)
@@ -57,7 +57,7 @@ async def gen(ctx, appid: str):
         try:
             name = get_game_name(appid)
             
-            # This is the NATIVE Steam AppManifest format
+            # 1. Native Steam ACF Content
             acf_content = f""" "AppState"
 {{
     "appid" "{appid}"
@@ -68,23 +68,34 @@ async def gen(ctx, appid: str):
     "LastOwner" "0"
 }}
 """
-            # ZIP with folder structure for ZERO WORK drag-and-drop
+            # 2. SteamTools Manifest Content (JSON)
+            manifest_content = f"""{{
+    "appmanifest": {{
+        "appid": "{appid}",
+        "name": "{name}",
+        "StateFlags": "4"
+    }}
+}}"""
+
+            # ZIP with folder structure for ZERO WORK
             zip_buffer = io.BytesIO()
             with zipfile.ZipFile(zip_buffer, "w") as zf:
-                # We put the .acf inside 'steamapps' so you just drag the folder
+                # The ACF goes in steamapps
                 zf.writestr(f"steamapps/appmanifest_{appid}.acf", acf_content)
+                # The Manifest goes in manifests (for SteamTools/GreenLuma)
+                zf.writestr(f"manifests/{appid}.manifest", manifest_content)
             
             zip_buffer.seek(0)
-            file = discord.File(fp=zip_buffer, filename=f"Native_ACF_{appid}.zip")
+            file = discord.File(fp=zip_buffer, filename=f"Full_Pack_{appid}.zip")
             
-            await ctx.send(f"✅ **{name}** (ACF format). Drag 'steamapps' to your Steam folder.", file=file)
+            await ctx.send(f"✅ **{name}** Pack Ready! (5 daily limit)", file=file)
             
         except Exception as e:
-            await ctx.send(f"⚠️ Error creating file: {str(e)}")
+            await ctx.send(f"⚠️ Error: {str(e)}")
 
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandOnCooldown):
-        await ctx.send(f"⏳ Daily limit reached (5/5). Try again in {int(error.retry_after // 3600)}h.")
+        await ctx.send(f"⏳ Daily limit reached. Try again in {int(error.retry_after // 3600)}h.")
 
 bot.run(TOKEN)
