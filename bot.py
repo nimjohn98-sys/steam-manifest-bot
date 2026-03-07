@@ -6,42 +6,11 @@ import requests
 import urllib.parse
 
 # --- CONFIG ---
-TOKEN = 'MTQ3NjYwNTAxMDUwMTQzOTU0OA.GKeB4T.7DZq4z7p56d3CxnJRzM4AQ8fMWmtp8LCkdM2yg'
-
-# Channel and Role Names
-TARGET_CHANNEL_NAME = "🗣️║manifest"
-REQUIRED_ROLE = "Level 15+"
-INFINITE_ROLES = ["Owner", "Founder", "Admin"]
-STANDARD_LIMIT = 20
+TOKEN = 'MTQ3NjYwNTAxMDUwMTQzOTU0OA.GKeB4T.7DZq4z7p56d3CxnJRzM4AQ8fMWmtp8LCkdM2yg' 
 
 intents = discord.Intents.default()
 intents.message_content = True
-intents.members = True 
 bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
-
-# --- PERMISSION & CHANNEL CHECK ---
-def has_permission():
-    async def predicate(ctx):
-        user_roles = [role.name for role in ctx.author.roles]
-        is_staff = any(r in user_roles for r in INFINITE_ROLES)
-        
-        # 1. Check Channel (Staff bypass this check)
-        if ctx.channel.name != TARGET_CHANNEL_NAME and not is_staff:
-            return False # Silently ignore or add a message if preferred
-
-        # 2. Check Role
-        if REQUIRED_ROLE in user_roles or is_staff:
-            return True
-        
-        await ctx.send(f"⚠️ **Access Denied:** You must be `{REQUIRED_ROLE}` to use this.")
-        return False
-    return commands.check(predicate)
-
-# --- COOLDOWN LOGIC ---
-def custom_cooldown(msg):
-    if any(role.name in INFINITE_ROLES for role in msg.author.roles):
-        return None 
-    return commands.Cooldown(STANDARD_LIMIT, 86400)
 
 def get_game_name(appid):
     try:
@@ -55,11 +24,16 @@ def get_game_name(appid):
 
 @bot.event
 async def on_ready():
-    print(f'🚀 Channel-Locked Bot Online: {bot.user}')
-    print(f'Listening only in: {TARGET_CHANNEL_NAME}')
+    print(f'🚀 ACF + Manifest Bot Online: {bot.user}')
 
 @bot.command()
-@has_permission()
+async def help(ctx):
+    embed = discord.Embed(title="📦 Steam All-In-One Generator", color=0x27ae60)
+    embed.add_field(name="Commands", value="`!search [game]`\n`!gen [appid]`", inline=False)
+    embed.add_field(name="Zero-Work Instructions", value="1. Close Steam.\n2. Open ZIP.\n3. Drag **steamapps** and **manifests** folders into your main Steam/Tool folder.\n4. Merge folders and restart Steam.", inline=False)
+    await ctx.send(embed=embed)
+
+@bot.command()
 async def search(ctx, *, query: str):
     url = f"https://store.steampowered.com/api/storesearch/?term={query}&l=english&cc=US"
     try:
@@ -70,11 +44,10 @@ async def search(ctx, *, query: str):
         else:
             await ctx.send("❌ No game found.")
     except:
-        await ctx.send("⚠️ Steam API busy.")
+        await ctx.send("⚠️ Steam API error.")
 
 @bot.command()
-@has_permission()
-@commands.dynamic_cooldown(custom_cooldown, commands.BucketType.user)
+@commands.cooldown(5, 86400, commands.BucketType.user)
 async def gen(ctx, appid: str):
     if not appid.isdigit():
         ctx.command.reset_cooldown(ctx)
@@ -84,19 +57,38 @@ async def gen(ctx, appid: str):
         try:
             name = get_game_name(appid)
             
-            # ACF (Steam) and Manifest (SteamTools)
-            acf = f' "AppState"\n{{\n    "appid" "{appid}"\n    "name" "{name}"\n    "StateFlags" "4"\n    "installdir" "{name}"\n}}'
-            manifest = f'{{"appmanifest":{{"appid":"{appid}","name":"{name}","StateFlags":"4"}}}}'
+            # 1. Native Steam ACF Content
+            acf_content = f""" "AppState"
+{{
+    "appid" "{appid}"
+    "Universe" "1"
+    "name" "{name}"
+    "StateFlags" "4"
+    "installdir" "{name}"
+    "LastOwner" "0"
+}}
+"""
+            # 2. SteamTools Manifest Content (JSON)
+            manifest_content = f"""{{
+    "appmanifest": {{
+        "appid": "{appid}",
+        "name": "{name}",
+        "StateFlags": "4"
+    }}
+}}"""
 
+            # ZIP with folder structure for ZERO WORK
             zip_buffer = io.BytesIO()
             with zipfile.ZipFile(zip_buffer, "w") as zf:
-                # ZERO WORK: Folders are pre-made in the ZIP
-                zf.writestr(f"steamapps/appmanifest_{appid}.acf", acf)
-                zf.writestr(f"manifests/{appid}.manifest", manifest)
+                # The ACF goes in steamapps
+                zf.writestr(f"steamapps/appmanifest_{appid}.acf", acf_content)
+                # The Manifest goes in manifests (for SteamTools/GreenLuma)
+                zf.writestr(f"manifests/{appid}.manifest", manifest_content)
             
             zip_buffer.seek(0)
-            file = discord.File(fp=zip_buffer, filename=f"Pack_{appid}.zip")
-            await ctx.send(f"✅ **{name}** Pack Ready for {ctx.author.mention}!", file=file)
+            file = discord.File(fp=zip_buffer, filename=f"Full_Pack_{appid}.zip")
+            
+            await ctx.send(f"✅ **{name}** Pack Ready! (5 daily limit)", file=file)
             
         except Exception as e:
             await ctx.send(f"⚠️ Error: {str(e)}")
@@ -104,11 +96,6 @@ async def gen(ctx, appid: str):
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandOnCooldown):
-        await ctx.send(f"⏳ **Limit Reached!** (20/day).")
-    elif isinstance(error, commands.CheckFailure):
-        # This handles cases where user is in the wrong channel or lacks roles
-        pass 
-    else:
-        print(f"Error: {error}")
+        await ctx.send(f"⏳ Daily limit reached. Try again in {int(error.retry_after // 3600)}h.")
 
 bot.run(TOKEN)
