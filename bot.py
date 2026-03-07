@@ -6,11 +6,34 @@ import requests
 import urllib.parse
 
 # --- CONFIG ---
-TOKEN = 'MTQ3NjYwNTAxMDUwMTQzOTU0OA.GKeB4T.7DZq4z7p56d3CxnJRzM4AQ8fMWmtp8LCkdM2yg' 
+TOKEN = 'MTQ3NjYwNTAxMDUwMTQzOTU0OA.GKeB4T.7DZq4z7p56d3CxnJRzM4AQ8fMWmtp8LCkdM2yg'
+
+# Role Names
+INFINITE_ROLES = ["Owner", "Founder", "Admin"]
+REQUIRED_ROLE = "Level 15+"  # Only this role and above can use the bot
+STANDARD_LIMIT = 20
 
 intents = discord.Intents.default()
 intents.message_content = True
+intents.members = True # Essential to check user roles
 bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
+
+# --- ACCESS CHECK ---
+def has_permission():
+    async def predicate(ctx):
+        user_roles = [role.name for role in ctx.author.roles]
+        # Allow if they have the Level 15+ role OR are a Founder/Owner
+        if REQUIRED_ROLE in user_roles or any(r in user_roles for r in INFINITE_ROLES):
+            return True
+        await ctx.send(f"⚠️ **Access Denied:** You must be `{REQUIRED_ROLE}` to use the manifest bot.")
+        return False
+    return commands.check(predicate)
+
+# --- COOLDOWN LOGIC ---
+def custom_cooldown(msg):
+    if any(role.name in INFINITE_ROLES for role in msg.author.roles):
+        return None # No limit for Owners/Founders
+    return commands.Cooldown(STANDARD_LIMIT, 86400) # 20 per day for Level 15+
 
 def get_game_name(appid):
     try:
@@ -24,16 +47,10 @@ def get_game_name(appid):
 
 @bot.event
 async def on_ready():
-    print(f'🚀 ACF + Manifest Bot Online: {bot.user}')
+    print(f'🚀 Access-Locked Bot Online: {bot.user}')
 
 @bot.command()
-async def help(ctx):
-    embed = discord.Embed(title="📦 Steam All-In-One Generator", color=0x27ae60)
-    embed.add_field(name="Commands", value="`!search [game]`\n`!gen [appid]`", inline=False)
-    embed.add_field(name="Zero-Work Instructions", value="1. Close Steam.\n2. Open ZIP.\n3. Drag **steamapps** and **manifests** folders into your main Steam/Tool folder.\n4. Merge folders and restart Steam.", inline=False)
-    await ctx.send(embed=embed)
-
-@bot.command()
+@has_permission()
 async def search(ctx, *, query: str):
     url = f"https://store.steampowered.com/api/storesearch/?term={query}&l=english&cc=US"
     try:
@@ -47,7 +64,8 @@ async def search(ctx, *, query: str):
         await ctx.send("⚠️ Steam API error.")
 
 @bot.command()
-@commands.cooldown(5, 86400, commands.BucketType.user)
+@has_permission()
+@commands.dynamic_cooldown(custom_cooldown, commands.BucketType.user)
 async def gen(ctx, appid: str):
     if not appid.isdigit():
         ctx.command.reset_cooldown(ctx)
@@ -57,38 +75,18 @@ async def gen(ctx, appid: str):
         try:
             name = get_game_name(appid)
             
-            # 1. Native Steam ACF Content
-            acf_content = f""" "AppState"
-{{
-    "appid" "{appid}"
-    "Universe" "1"
-    "name" "{name}"
-    "StateFlags" "4"
-    "installdir" "{name}"
-    "LastOwner" "0"
-}}
-"""
-            # 2. SteamTools Manifest Content (JSON)
-            manifest_content = f"""{{
-    "appmanifest": {{
-        "appid": "{appid}",
-        "name": "{name}",
-        "StateFlags": "4"
-    }}
-}}"""
+            acf = f' "AppState"\n{{\n    "appid" "{appid}"\n    "name" "{name}"\n    "StateFlags" "4"\n    "installdir" "{name}"\n}}'
+            manifest = f'{{"appmanifest":{{"appid":"{appid}","name":"{name}","StateFlags":"4"}}}}'
 
-            # ZIP with folder structure for ZERO WORK
             zip_buffer = io.BytesIO()
             with zipfile.ZipFile(zip_buffer, "w") as zf:
-                # The ACF goes in steamapps
-                zf.writestr(f"steamapps/appmanifest_{appid}.acf", acf_content)
-                # The Manifest goes in manifests (for SteamTools/GreenLuma)
-                zf.writestr(f"manifests/{appid}.manifest", manifest_content)
+                # Same zero-work folder structure
+                zf.writestr(f"steamapps/appmanifest_{appid}.acf", acf)
+                zf.writestr(f"manifests/{appid}.manifest", manifest)
             
             zip_buffer.seek(0)
-            file = discord.File(fp=zip_buffer, filename=f"Full_Pack_{appid}.zip")
-            
-            await ctx.send(f"✅ **{name}** Pack Ready! (5 daily limit)", file=file)
+            file = discord.File(fp=zip_buffer, filename=f"Pack_{appid}.zip")
+            await ctx.send(f"✅ **{name}** Generated for {ctx.author.mention}!", file=file)
             
         except Exception as e:
             await ctx.send(f"⚠️ Error: {str(e)}")
@@ -96,6 +94,10 @@ async def gen(ctx, appid: str):
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandOnCooldown):
-        await ctx.send(f"⏳ Daily limit reached. Try again in {int(error.retry_after // 3600)}h.")
+        await ctx.send(f"⏳ **Limit Reached!** (20/24h). Owners/Founders have no limit.")
+    elif isinstance(error, commands.CheckFailure):
+        pass # Message already sent in the check
+    else:
+        print(f"Error: {error}")
 
 bot.run(TOKEN)
