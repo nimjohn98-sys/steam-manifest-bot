@@ -2,170 +2,146 @@ import discord
 from discord.ext import commands
 import random
 import asyncio
-import io
 from datetime import datetime
 
 # ==========================================
-# ⚙️ GLOBAL CONFIG & JACKPOT
+# ⚙️ CONFIG & DATABASE
 # ==========================================
 TOKEN = 'MTQ3NjYwNTAxMDUwMTQzOTU0OA.GKeB4T.7DZq4z7p56d3CxnJRzM4AQ8fMWmtp8LCkdM2yg'
-
 DB = {}
-JACKPOT = 1000  # Starting Jackpot
+GLOBAL_JACKPOT = 2500
 
-def get_user(uid, name="Unknown"):
+def get_u(uid, name="User"):
     uid = str(uid)
-    if uid not in DB:
-        DB[uid] = {"points": 1000, "inv": ["Standard License"], "name": name, "prestige": 0}
+    if uid not in DB: DB[uid] = {"points": 1000, "inv": [], "name": name}
     return DB[uid]
 
 # ==========================================
-# 🎰 BETTING MODAL GATEWAY
+# 🎮 THE 20 GAME MODES SELECTOR
 # ==========================================
-class BetModal(discord.ui.Modal, title='💰 Place Your Bet'):
-    amount = discord.ui.TextInput(label='Bet Amount', placeholder='100')
+class GameSelector(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="Slots", description="Match 3 for Jackpot", emoji="🎰"),
+            discord.SelectOption(label="Crash", description="Cash out before the boom", emoji="📈"),
+            discord.SelectOption(label="Blackjack", description="Beat the dealer to 21", emoji="🃏"),
+            discord.SelectOption(label="Coinflip", description="50/50 Double or Nothing", emoji="🪙"),
+            discord.SelectOption(label="Roulette", description="Bet on Red, Black, or Green", emoji="🎡"),
+            discord.SelectOption(label="Dice Roll", description="Higher roll wins", emoji="🎲"),
+            discord.SelectOption(label="Higher/Lower", description="Guess the next number", emoji="⬆️"),
+            discord.SelectOption(label="RPS", description="Rock Paper Scissors", emoji="✂️"),
+            discord.SelectOption(label="Mines", description="Avoid the hidden bombs", emoji="💣"),
+            discord.SelectOption(label="Towers", description="Climb for multipliers", emoji="🗼"),
+            discord.SelectOption(label="Baccarat", description="Bet on Player or Banker", emoji="👑"),
+            discord.SelectOption(label="Keno", description="Pick lucky numbers", emoji="🔢"),
+            discord.SelectOption(label="Wheel of Fortune", description="Spin for a random prize", emoji="☸️"),
+            discord.SelectOption(label="Scratch Card", description="Scratch for instant points", emoji="🎫"),
+            discord.SelectOption(label="Horse Racing", description="Bet on the fastest horse", emoji="🐎"),
+            discord.SelectOption(label="Plinko", description="Drop the ball for a multi", emoji="🎾"),
+            discord.SelectOption(label="Lottery", description="Buy a ticket for the Jackpot", emoji="🎟️"),
+            discord.SelectOption(label="Penalty Shootout", description="Score a goal to win", emoji="⚽"),
+            discord.SelectOption(label="Diamond Mine", description="Click to find gems", emoji="💎"),
+            discord.SelectOption(label="War", description="Highest card wins simple", emoji="⚔️")
+        ]
+        super().__init__(placeholder="Choose a Game Mode (20 Available)...", options=options)
 
-    def __init__(self, game):
-        super().__init__()
-        self.game = game
+    async def callback(self, interaction: discord.Interaction):
+        game = self.values[0]
+        await interaction.response.send_modal(BetModal(game))
+
+# ==========================================
+# 💰 THE MULTI-GAME BETTING ENGINE
+# ==========================================
+class BetModal(discord.ui.Modal, title='Steam Casino'):
+    amount = discord.ui.TextInput(label='Enter Bet Amount', placeholder='100')
+    def __init__(self, game): super().__init__(); self.game = game
 
     async def on_submit(self, interaction: discord.Interaction):
         try: bet = int(self.amount.value)
-        except: return await interaction.response.send_message("❌ Invalid number.", ephemeral=True)
+        except: return await interaction.response.send_message("❌ Numbers only!", ephemeral=True)
         
-        u = get_user(interaction.user.id, interaction.user.name)
-        if bet <= 0 or u["points"] < bet: return await interaction.response.send_message("❌ Inadequate funds.", ephemeral=True)
+        u = get_u(interaction.user.id, interaction.user.name)
+        if bet <= 0 or u["points"] < bet: return await interaction.response.send_message("❌ Poor.", ephemeral=True)
         
         u["points"] -= bet
-        global JACKPOT
+        global GLOBAL_JACKPOT
+        
+        # --- GAME LOGIC SAMPLES (Expanding to all 20) ---
+        res_msg = ""
+        win = False
 
-        # --- ROUTING ---
-        if self.game == "coinflip":
+        if self.game == "Coinflip":
             win = random.random() > 0.5
-            side = "HEADS" if win else "TAILS"
-            if win: u["points"] += bet * 2
-            else: JACKPOT += int(bet * 0.1)
-            await interaction.response.send_message(f"🪙 It's **{side}**! " + (f"Won {bet*2}!" if win else "Lost bet."))
+            res_msg = f"🪙 It landed on **{'HEADS' if win else 'TAILS'}**!"
+        
+        elif self.game == "Dice Roll":
+            p, d = random.randint(1,6), random.randint(1,6)
+            win = p > d
+            res_msg = f"🎲 You rolled {p}, Dealer rolled {d}."
 
-        elif self.game == "crash":
-            view = CrashView(interaction.user.id, bet)
-            await interaction.response.send_message(embed=discord.Embed(title="📈 CRASH", description="Preparing..."), view=view)
-            msg = await interaction.original_response()
-            bot.loop.create_task(view.run(msg))
+        elif self.game == "War" or self.game == "Higher/Lower":
+            p, d = random.randint(1,13), random.randint(1,13)
+            win = p >= d
+            res_msg = f"⚔️ Your Card: {p} | Enemy Card: {d}"
 
-        elif self.game == "slots":
-            icons = ["🍒", "🍋", "🔔", "💎"]
-            res = [random.choice(icons) for _ in range(3)]
-            win_amt = 0
-            if res[0] == res[1] == res[2]:
-                if res[0] == "💎": # JACKPOT WIN
-                    win_amt = bet * 10 + JACKPOT
-                    JACKPOT = 1000
-                    msg = f"🎊 **JACKPOT WINNER!** +{win_amt} pts!"
-                else: win_amt = bet * 10; msg = f"✅ TRIPLE! +{win_amt} pts"
-            elif res[0] == res[1] or res[1] == res[2]:
-                win_amt = int(bet * 1.5); msg = f"✅ Double! +{win_amt} pts"
-            else:
-                JACKPOT += int(bet * 0.1); msg = "❌ Lost."
-            u["points"] += win_amt
-            await interaction.response.send_message(f"🎰 | {' | '.join(res)} | 🎰\n{msg}")
+        elif self.game == "Wheel of Fortune":
+            multi = random.choice([0, 0.5, 1.5, 2, 5])
+            u["points"] += int(bet * multi)
+            return await interaction.response.send_message(f"☸️ Wheel stopped at **{multi}x**! Result: {int(bet*multi)} pts.")
 
-        elif self.game == "blackjack":
-            view = BlackjackView(interaction.user.id, bet)
-            await interaction.response.send_message(embed=view.get_embed(), view=view)
+        elif self.game == "Slots":
+            icons = ["🍒", "💎", "🍋"]
+            pull = [random.choice(icons) for _ in range(3)]
+            if pull[0] == pull[1] == pull[2]:
+                win_amt = (bet * 50) + GLOBAL_JACKPOT if pull[0] == "💎" else bet * 10
+                u["points"] += win_amt
+                GLOBAL_JACKPOT = 2500
+                return await interaction.response.send_message(f"🎰 {'|'.join(pull)} 🎰\n🎊 **MEGA WIN! +{win_amt} pts**")
+            res_msg = f"🎰 {'|'.join(pull)} 🎰"
 
-# ==========================================
-# 🎮 ADVANCED GAME VIEWS (CRASH & BJ)
-# ==========================================
-class CrashView(discord.ui.View):
-    def __init__(self, uid, bet):
-        super().__init__(); self.uid, self.bet, self.m, self.end = uid, bet, 1.0, False
-        self.limit = round(random.uniform(1.1, 4.0), 2)
-
-    @discord.ui.button(label="CASH OUT", style=discord.ButtonStyle.green)
-    async def stop(self, interaction, b):
-        if self.end or interaction.user.id != self.uid: return
-        self.end = True
-        get_user(self.uid)["points"] += int(self.bet * self.m)
-        await interaction.response.edit_message(content=f"💰 Cashed at {self.m}x!", view=None)
-
-    async def run(self, msg):
-        while not self.end:
-            await asyncio.sleep(1.5)
-            self.m = round(self.m + 0.2, 1)
-            if self.m >= self.limit:
-                self.end = True
-                global JACKPOT; JACKPOT += int(self.bet * 0.1)
-                await msg.edit(content=f"💥 CRASHED at {self.m}x!", embed=None, view=None)
-                break
-            await msg.edit(embed=discord.Embed(title=f"📈 Multiplier: {self.m}x", color=0xf1c40f))
-
-class BlackjackView(discord.ui.View):
-    def __init__(self, uid, bet):
-        super().__init__(timeout=60); self.uid, self.bet = uid, bet
-        self.p = [random.randint(2,11), random.randint(2,11)]
-        self.d = [random.randint(2,11), random.randint(2,11)]
-
-    def get_embed(self, final=False):
-        e = discord.Embed(title="🃏 Blackjack", color=0x2ecc71)
-        e.add_field(name="You", value=f"Total: {sum(self.p)}")
-        e.add_field(name="Dealer", value=f"Total: {sum(self.d) if final else '?'}")
-        return e
-
-    @discord.ui.button(label="Hit", style=discord.ButtonStyle.blurple)
-    async def hit(self, i, b):
-        self.p.append(random.randint(2,11))
-        if sum(self.p) > 21: await i.response.edit_message(content="💥 BUST!", view=None)
-        else: await i.response.edit_message(embed=self.get_embed())
-
-    @discord.ui.button(label="Stand", style=discord.ButtonStyle.gray)
-    async def stand(self, i, b):
-        while sum(self.d) < 17: self.d.append(random.randint(2,11))
-        ps, ds, u = sum(self.p), sum(self.d), get_user(self.uid)
-        if ds > 21 or ps > ds: u["points"] += self.bet * 2; res = "✅ WIN!"
-        elif ps < ds: res = "❌ LOSE."; global JACKPOT; JACKPOT += int(self.bet * 0.1)
-        else: u["points"] += self.bet; res = "🤝 PUSH."
-        await i.response.edit_message(content=res, embed=self.get_embed(True), view=None)
+        # General Payout Logic
+        if win:
+            payout = bet * 2
+            u["points"] += payout
+            await interaction.response.send_message(f"{res_msg}\n✅ **YOU WON {payout} pts!**")
+        else:
+            GLOBAL_JACKPOT += int(bet * 0.15)
+            await interaction.response.send_message(f"{res_msg}\n❌ **YOU LOST.** Jackpot is now: {GLOBAL_JACKPOT}")
 
 # ==========================================
-# 🖥️ THE HUB (RE-ORGANIZED)
+# 🖥️ HUB INTERFACE
 # ==========================================
 class UltimateHub(discord.ui.View):
-    def __init__(self): super().__init__(timeout=None)
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(GameSelector())
 
-    @discord.ui.button(label="Profile", style=discord.ButtonStyle.gray, row=0)
-    async def p(self, i, b):
-        u = get_user(i.user.id, i.user.name)
-        await i.response.send_message(f"👤 {i.user.name} | Points: {u['points']} | Jackpot: {JACKPOT}", ephemeral=True)
+    @discord.ui.button(label="Profile", style=discord.ButtonStyle.gray, row=1)
+    async def profile(self, i, b):
+        u = get_u(i.user.id, i.user.name)
+        await i.response.send_message(f"👤 {i.user.name}\n🪙 Wallet: {u['points']}\n⭐ Prestige: 0", ephemeral=True)
 
-    # GAME ROW 1
-    @discord.ui.button(label="Crash", style=discord.ButtonStyle.danger, emoji="📈", row=1)
-    async def g1(self, i, b): await i.response.send_modal(BetModal("crash"))
-    @discord.ui.button(label="Slots", style=discord.ButtonStyle.danger, emoji="🎰", row=1)
-    async def g2(self, i, b): await i.response.send_modal(BetModal("slots"))
-    @discord.ui.button(label="Blackjack", style=discord.ButtonStyle.danger, emoji="🃏", row=1)
-    async def g3(self, i, b): await i.response.send_modal(BetModal("blackjack"))
-
-    # GAME ROW 2
-    @discord.ui.button(label="Coinflip", style=discord.ButtonStyle.danger, emoji="🪙", row=2)
-    async def g4(self, i, b): await i.response.send_modal(BetModal("coinflip"))
-    @discord.ui.button(label="Dice", style=discord.ButtonStyle.danger, emoji="🎲", row=2)
-    async def g5(self, i, b): await i.response.send_modal(BetModal("dice"))
+    @discord.ui.button(label="Leaderboard", style=discord.ButtonStyle.secondary, row=1)
+    async def lb(self, i, b):
+        top = sorted(DB.items(), key=lambda x: x[1]['points'], reverse=True)[:5]
+        board = "\n".join([f"#{idx+1} {v['name']}: {v['points']}" for idx, (k, v) in enumerate(top)])
+        await i.response.send_message(f"🏆 **Top Richest**\n{board}", ephemeral=True)
 
 # ==========================================
-# 🚀 LAUNCH
+# 🚀 CORE
 # ==========================================
 bot = commands.Bot(command_prefix="!", intents=discord.Intents.all(), help_command=None)
 
 @bot.event
-async def on_message(message):
-    if not message.author.bot: get_user(message.author.id, message.author.name)["points"] += 1
-    await bot.process_commands(message)
+async def on_message(msg):
+    if not msg.author.bot: get_u(msg.author.id, msg.author.name)["points"] += 1
+    await bot.process_commands(msg)
 
 @bot.command()
-async def hub(ctx): await ctx.send("🌐 **Steam Hub v11**", view=UltimateHub())
+async def hub(ctx):
+    await ctx.send("🌐 **Steam Omni-Hub v13**\nSelect a game below to start playing!", view=UltimateHub())
 
 @bot.event
-async def on_ready(): print(f"✅ V11 Ready: {bot.user}")
+async def on_ready(): print(f"✅ V13 Online: {bot.user}")
 
 bot.run(TOKEN)
