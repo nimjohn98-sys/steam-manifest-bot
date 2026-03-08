@@ -142,4 +142,4 @@ async def on_ready():
     print(f"🔥 Sovereign Engine Active: {bot.user}")
 
 # --- TOKEN ---
-bot.run('PASTE_YOUR_NEW_TOKEN_HERE')
+bot.run('MTQ3NjYwNTAxMDUwMTQzOTU0OA.GKeB4T.7DZq4z7p56d3CxnJRzM4AQ8fMWmtp8LCkdM2yg')
