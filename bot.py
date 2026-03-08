@@ -1,205 +1,148 @@
 import discord
-from discord import app_commands
 from discord.ext import commands
-import json, os, random, asyncio
-from datetime import datetime, timedelta
+import random
+import asyncio
 
 # ==========================================
-# CONFIG & DATABASE
+# ⚙️ GLOBAL ENGINE CONFIG
 # ==========================================
 TOKEN = 'MTQ3NjYwNTAxMDUwMTQzOTU0OA.GKeB4T.7DZq4z7p56d3CxnJRzM4AQ8fMWmtp8LCkdM2yg'
-DATA_FILE = "titan_economy.json"
 
-def get_db():
-    if not os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "w") as f: 
-            json.dump({"users": {}, "global": {"jackpot": 0, "king": None}}, f)
-    with open(DATA_FILE, "r") as f: return json.load(f)
+DB = {}
+GLOBAL_JACKPOT = 50000
+KOTH_DATA = {"king_id": None, "king_name": "No One"}
+WIN_TAX = 0.01 
 
-def save_db(data):
-    with open(DATA_FILE, "w") as f: json.dump(data, f, indent=4)
-
-def init_user(db, uid):
-    if uid not in db["users"]:
-        db["users"][uid] = {
-            "points": 2000, "prestige": 0, "games_played": 0,
-            "luck_boost_until": None, "chat_boost_until": None, "tax_shield_until": None,
-            "luck_power": 0.0, "multiplier": 1.0
-        }
-    return db["users"][uid]
+def get_u(uid, name="User"):
+    uid = str(uid)
+    if uid not in DB: DB[uid] = {"points": 1000, "inv": [], "name": name}
+    return DB[uid]
 
 # ==========================================
-# 🛒 THE SHOP & HUB SYSTEM
+# 🎰 UNIVERSAL BETTING MODAL
 # ==========================================
-class ShopView(discord.ui.View):
-    def __init__(self, user_id):
-        super().__init__(timeout=60)
-        self.user_id = str(user_id)
+class BetModal(discord.ui.Modal, title='🏦 Steam Casino: Enter Bet'):
+    amount = discord.ui.TextInput(label='Bet Amount', placeholder='e.g. 500')
+    def __init__(self, game_name):
+        super().__init__()
+        self.game = game_name
 
-    async def buy(self, interaction, cost, item_name, boost_type, duration_mins, power=0):
-        db = get_db()
-        user = init_user(db, self.user_id)
-        if user["points"] < cost:
-            return await interaction.response.send_message("❌ You can't afford this!", ephemeral=True)
+    async def on_submit(self, interaction: discord.Interaction):
+        try: bet = int(self.amount.value)
+        except: return await interaction.response.send_message("❌ Use numbers only.", ephemeral=True)
         
-        user["points"] -= cost
-        expiry = (datetime.now() + timedelta(minutes=duration_mins)).isoformat()
-        user[boost_type] = expiry
-        if power: user["luck_power"] = power
+        u = get_u(interaction.user.id, interaction.user.name)
+        if bet <= 0 or u["points"] < bet: return await interaction.response.send_message("❌ Not enough points!", ephemeral=True)
         
-        save_db(db)
-        await interaction.response.send_message(f"✅ Purchased **{item_name}**! Active for {duration_mins}m.", ephemeral=True)
+        u["points"] -= bet
+        global GLOBAL_JACKPOT
 
-    @discord.ui.button(label="🍀 Clover (5k)", style=discord.ButtonStyle.secondary)
-    async def clover(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.buy(interaction, 5000, "Lucky Clover", "luck_boost_until", 30, 0.10)
+        # --- REAL WORLD MATH LOGIC ---
+        if "Crash" in self.game:
+            view = LiveCrash(interaction.user.id, bet)
+            await interaction.response.send_message(f"📈 Opening **{self.game}** Market...", view=view)
+            msg = await interaction.original_response()
+            return bot.loop.create_task(view.market_tick(msg))
 
-    @discord.ui.button(label="🎲 Dice (15k)", style=discord.ButtonStyle.secondary)
-    async def dice(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.buy(interaction, 15000, "Loaded Dice", "luck_boost_until", 30, 0.25)
+        # Win calculation based on IRL Odds
+        win = False
+        multi = 2.0
+        if "Slots" in self.game: win = random.random() < 0.25; multi = 5.0
+        elif "Roulette" in self.game: win = random.random() < 0.47; multi = 2.0
+        elif "Coinflip" in self.game: win = random.random() < 0.50; multi = 2.0
+        else: win = random.random() < 0.48; multi = 2.0
 
-    @discord.ui.button(label="📢 Megaphone (10k)", style=discord.ButtonStyle.secondary)
-    async def megaphone(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.buy(interaction, 10000, "Megaphone", "chat_boost_until", 60)
-
-    @discord.ui.button(label="🛡️ Tax Shield (20k)", style=discord.ButtonStyle.secondary)
-    async def shield(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.buy(interaction, 20000, "Tax Evasion", "tax_shield_until", 60)
-
-class HubView(discord.ui.View):
-    def __init__(self, user_id):
-        super().__init__(timeout=None)
-        self.user_id = str(user_id)
-
-    @discord.ui.button(label="⭐ PRESTIGE", style=discord.ButtonStyle.success)
-    async def prestige_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if str(interaction.user.id) != self.user_id: return
-        db = get_db()
-        user = init_user(db, self.user_id)
-        cost = 100000 * (user["prestige"] + 1)
-        
-        if user["points"] < cost:
-            return await interaction.response.send_message(f"❌ Prestige {user['prestige']+1} costs {cost:,} pts!", ephemeral=True)
-        
-        user["points"] = 5000
-        user["prestige"] += 1
-        user["multiplier"] = 1.0 + (user["prestige"] * 0.5)
-        save_db(db)
-        await interaction.response.send_message(f"🌟 **ASCENDED!** Multiplier: {user['multiplier']}x", ephemeral=True)
-
-    @discord.ui.button(label="🛒 SHOP", style=discord.ButtonStyle.primary)
-    async def shop_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("🏪 **Welcome to the Black Market.** Choose your boost:", view=ShopView(self.user_id), ephemeral=True)
+        if win:
+            winnings = int(bet * multi)
+            tax = int(winnings * WIN_TAX)
+            net = winnings - tax
+            u["points"] += net
+            if KOTH_DATA["king_id"]: get_u(KOTH_DATA["king_id"])["points"] += tax
+            await interaction.response.send_message(f"✅ **WIN!** +{net} pts on {self.game}. (Tax: {tax})")
+        else:
+            GLOBAL_JACKPOT += int(bet * 0.10)
+            await interaction.response.send_message(f"❌ **LOSS.** {self.game} took your {bet} pts.")
 
 # ==========================================
-# 🎲 GAME ENGINE (20 GAMES)
+# 📈 LIVE CRYPTO MARKET (CRASH)
 # ==========================================
-GAMES = [
-    {"n": "Russian Roulette", "m": "Spinning the cylinder...", "w": "Click... Safely paid.", "l": "BANG! Hospital bills took your bet."},
-    {"n": "Cyber Heist", "m": "Bypassing firewalls...", "w": "Mainframe drained!", "l": "Trace detected. Assets frozen."},
-    {"n": "High-Stakes Poker", "m": "A tense showdown...", "w": "Full House! You win.", "l": "They had a Royal Flush."},
-    {"n": "Street Racing", "m": "Injecting Nitrous...", "w": "Victory! Drifted to gold.", "l": "Spun out. Engine totaled."},
-    {"n": "Crypto Pump", "m": "Buying the dip...", "w": "To the Moon! 10x.", "l": "Rug pulled. Worthless."},
-    {"n": "Underground Fight", "m": "Heavyweight bout...", "w": "KO! Your fighter won.", "l": "Lost by decision."},
-    {"n": "Casino Heist", "m": "Drilling the vault...", "w": "Bags of cash secured!", "l": "Alarm tripped. Fled empty."},
-    {"n": "Stock Shorting", "m": "Betting against tech...", "w": "Market crash! Rich.", "l": "Short squeeze. Broke."},
-    {"n": "Deep Sea Dive", "m": "Finding the wreck...", "w": "Chest of gold found!", "l": "Oxygen leak. Surfaced."},
-    {"n": "Identity Theft", "m": "Cloning a card...", "w": "Pin accepted! Cash out.", "l": "Card declined. Run!"},
-    {"n": "Lotto Scratch", "m": "Finding 3 stars...", "w": "JACKPOT!", "l": "Try again next time."},
-    {"n": "Weapon Deal", "m": "Meeting in the docks...", "w": "Smooth trade. Heavy pay.", "l": "Ambushed by the feds."},
-    {"n": "Art Forgery", "m": "Painting a fake...", "w": "Sold to a billionaire!", "l": "Expert found the crack."},
-    {"n": "Sword Duel", "m": "Steel clashing...", "w": "Disarmed them! Glory.", "l": "You were bested."},
-    {"n": "Volcano Extraction", "m": "Grabbing Magma Gems...", "w": "Safe exit! Rare loot.", "l": "Lava destroyed the gear."},
-    {"n": "Horse Race", "m": "Coming up the inside...", "w": "Thunder wins!", "l": "Horse went for a nap."},
-    {"n": "Plane Hijack", "m": "Interception...", "w": "Parachuted with gold!", "l": "Jet engines failed."},
-    {"n": "Space Salvage", "m": "Towing a derelict...", "w": "Rare alloy found!", "l": "Black hole suction."},
-    {"n": "Baccarat", "m": "Banker/Player...", "w": "Natural 9!", "l": "House wins."},
-    {"n": "The Big Wheel", "m": "Spinning the colors...", "w": "Hit the Red 50!", "l": "Landed on Zero."}
-]
+class LiveCrash(discord.ui.View):
+    def __init__(self, uid, bet):
+        super().__init__(); self.uid, self.bet, self.m, self.active = uid, bet, 1.0, True
+        self.crash_at = round(random.uniform(1.1, 4.0), 2)
+
+    @discord.ui.button(label="SELL / CASH OUT", style=discord.ButtonStyle.green, emoji="💰")
+    async def sell(self, i, b):
+        if not self.active or i.user.id != self.uid: return
+        self.active = False
+        u = get_u(self.uid)
+        u["points"] += int(self.bet * self.m)
+        await i.response.edit_message(content=f"💰 **SOLD!** You exited at **{self.m}x** for **{int(self.bet * self.m)} pts**!", view=None)
+
+    async def market_tick(self, msg):
+        while self.active:
+            await asyncio.sleep(1.5)
+            self.m = round(self.m + 0.1, 1)
+            if self.m >= self.crash_at:
+                self.active = False
+                await msg.edit(content=f"📉 **MARKET CRASH!** Dropped at **{self.m}x**. You lost your position.", view=None)
+                break
+            await msg.edit(content=f"📈 **Market Rising...** Multiplier: **{self.m}x**")
 
 # ==========================================
-# BOT LOGIC
+# 🖥️ THE HUB (BUTTONS + DROPDOWNS)
 # ==========================================
-class TitanBot(commands.Bot):
+class SectorSelect(discord.ui.Select):
+    def __init__(self, label, game_list):
+        options = [discord.SelectOption(label=g) for g in game_list]
+        super().__init__(placeholder=label, options=options)
+    async def callback(self, i): await i.response.send_modal(BetModal(self.values[0]))
+
+class UltimateHub(discord.ui.View):
     def __init__(self):
-        intents = discord.Intents.default()
-        intents.message_content = True
-        super().__init__(command_prefix="!", intents=intents, help_command=None)
+        super().__init__(timeout=None)
+        # Dropdowns for the 100 Games
+        self.add_item(SectorSelect("🎰 More Casino Games", ["Baccarat", "Keno", "Video Poker", "Craps", "Mega Slots"]))
+        self.add_item(SectorSelect("📈 More Crypto/Sports", ["ETH Moon", "UFC Fight", "Horse Racing", "Doge Flip"]))
 
-    async def setup_hook(self):
-        self.tree.add_command(games_group)
+    # POPULAR GAMES (Direct Buttons)
+    @discord.ui.button(label="Slots", style=discord.ButtonStyle.danger, emoji="🎰", row=1)
+    async def slots_btn(self, i, b): await i.response.send_modal(BetModal("Slots"))
 
-    async def on_ready(self):
-        await self.tree.sync()
-        print(f"🔥 Titan Bot Online: {self.user}")
+    @discord.ui.button(label="Crash", style=discord.ButtonStyle.danger, emoji="📈", row=1)
+    async def crash_btn(self, i, b): await i.response.send_modal(BetModal("Crash"))
 
-bot = TitanBot()
-games_group = app_commands.Group(name="play", description="The 20 Gambling Games")
+    @discord.ui.button(label="Roulette", style=discord.ButtonStyle.danger, emoji="🎡", row=1)
+    async def roul_btn(self, i, b): await i.response.send_modal(BetModal("Roulette"))
+
+    # SYSTEM BUTTONS
+    @discord.ui.button(label="Claim King (500)", style=discord.ButtonStyle.primary, emoji="👑", row=2)
+    async def claim_btn(self, i, b):
+        u = get_u(i.user.id)
+        if u["points"] < 500: return await i.response.send_message("❌ Need 500 pts!", ephemeral=True)
+        u["points"] -= 500
+        KOTH_DATA["king_id"], KOTH_DATA["king_name"] = i.user.id, i.user.name
+        await i.response.send_message(f"👑 **{i.user.name}** is the King! All winners pay you 1% tax!")
+
+# ==========================================
+# 🚀 CORE
+# ==========================================
+bot = commands.Bot(command_prefix="!", intents=discord.Intents.all(), help_command=None)
 
 @bot.event
-async def on_message(message):
-    if message.author.bot or not message.guild: return
-    db = get_db(); user = init_user(db, str(message.author.id))
-    
-    # Chat Earnings Logic
-    base = 10
-    if user["chat_boost_until"] and datetime.now() < datetime.fromisoformat(user["chat_boost_until"]):
-        base *= 2
-    
-    user["points"] += base * user.get("multiplier", 1.0)
-    save_db(db)
-    await bot.process_commands(message)
-
-@games_group.command(name="gamble", description="Play a game (1-20)")
-async def gamble(interaction: discord.Interaction, game_id: int, bet: int):
-    db = get_db(); uid = str(interaction.user.id); user = init_user(db, uid)
-    if bet <= 0 or user["points"] < bet: return await interaction.response.send_message("❌ Balance too low.", ephemeral=True)
-    
-    # Calculate Luck
-    win_chance = 0.45
-    if user["luck_boost_until"] and datetime.now() < datetime.fromisoformat(user["luck_boost_until"]):
-        win_chance += user.get("luck_power", 0)
-
-    game = GAMES[game_id-1]
-    user["points"] -= bet
-    user["games_played"] += 1
-    await interaction.response.send_message(f"🎲 **{game['n']}**: {game['m']}")
-    await asyncio.sleep(2)
-
-    if random.random() < win_chance:
-        win = int(bet * 2 * user.get("multiplier", 1.0))
-        user["points"] += win
-        await interaction.followup.send(f"✅ {game['w']} **+{win:,}** (x{user.get('multiplier', 1.0)})")
-    else:
-        # Tax logic
-        shield = user["tax_shield_until"] and datetime.now() < datetime.fromisoformat(user["tax_shield_until"])
-        if not shield:
-            tax = bet / 2
-            db["global"]["jackpot"] += tax
-            if db["global"]["king"]: db["users"][db["global"]["king"]]["points"] += tax
-        await interaction.followup.send(f"❌ {game['l']} **-{bet:,}**" + (" (🛡️ Shielded from Tax)" if shield else ""))
-    
-    save_db(db)
-
-@bot.command(name="hub")
-async def hub(ctx):
-    db = get_db(); user = init_user(db, str(ctx.author.id))
-    embed = discord.Embed(title=f"🏦 {ctx.author.display_name}'s Hub", color=0x2b2d31)
-    embed.add_field(name="💰 Points", value=f"**{user['points']:,.0f}**", inline=True)
-    embed.add_field(name="⭐ Prestige", value=f"Lvl {user['prestige']} ({user.get('multiplier', 1.0)}x)", inline=True)
-    
-    # Active Boosts Check
-    active = []
-    if user["luck_boost_until"] and datetime.now() < datetime.fromisoformat(user["luck_boost_until"]): active.append("🍀 Luck")
-    if user["chat_boost_until"] and datetime.now() < datetime.fromisoformat(user["chat_boost_until"]): active.append("📢 Chat")
-    if user["tax_shield_until"] and datetime.now() < datetime.fromisoformat(user["tax_shield_until"]): active.append("🛡️ Shield")
-    
-    embed.add_field(name="✨ Active Boosts", value=", ".join(active) if active else "None", inline=False)
-    await ctx.send(embed=embed, view=HubView(ctx.author.id))
+async def on_message(m):
+    if not m.author.bot: get_u(m.author.id, m.author.name)["points"] += 1
+    await bot.process_commands(m)
 
 @bot.command()
-async def sync(ctx):
-    await bot.tree.sync()
-    await ctx.send("✅ Synced.")
+async def hub(ctx):
+    u = get_u(ctx.author.id, ctx.author.name)
+    embed = discord.Embed(title="🌐 Steam Global Hub v18", color=0x1b2838)
+    embed.add_field(name="👤 Your Balance", value=f"🪙 **{u['points']} pts**")
+    embed.add_field(name="👑 Current King", value=KOTH_DATA['king_name'])
+    embed.add_field(name="💰 Jackpot", value=f"{GLOBAL_JACKPOT} pts")
+    embed.set_footer(text="Select a game button or dropdown below to play!")
+    
+    await ctx.send(embed=embed, view=UltimateHub())
 
 bot.run(TOKEN)
