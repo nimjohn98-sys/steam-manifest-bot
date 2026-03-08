@@ -6,13 +6,12 @@ import datetime
 import json
 import os
 
-# --- 1. CORE CONFIGURATION ---
+# --- 1. CORE ENGINE & DB ---
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Persistence System
-DB_FILE = "titan_data.json"
+DB_FILE = "empire_rpg_data.json"
 
 def load_data():
     if os.path.exists(DB_FILE):
@@ -31,229 +30,148 @@ def get_profile(uid):
     uid = str(uid)
     if uid not in economy:
         economy[uid] = {
-            "points": 1000, 
-            "multi": 1.0, 
-            "rebirths": 0, 
-            "shields": 0,
-            "job": "Unemployed", 
-            "last_daily": None, 
-            "last_work": None,
-            "inventory": [], 
-            "xp": 0,
-            "level": 1,
-            "fish_caught": 0,
-            "animals_hunted": 0
+            "points": 1000, "multi": 1.0, "rebirths": 0, "shields": 0,
+            "job": "Unemployed", "last_daily": None, "inventory": [], 
+            "level": 1, "xp": 0, "hp": 100, "max_hp": 100, "class": None,
+            "dungeon_wins": 0, "atk": 10, "def": 5
         }
     return economy[uid]
 
-# --- 2. THE ITEM DATABASE ---
-ITEMS = {
-    "Bronze_Rod": {"cost": 500, "type": "tool", "desc": "Better fishing chances."},
-    "Iron_Pickaxe": {"cost": 1500, "type": "tool", "desc": "Mine 2x more ore."},
-    "Hunting_Rifle": {"cost": 5000, "type": "tool", "desc": "Unlock the !hunt command."},
-    "Shield_Battery": {"cost": 250, "type": "consumable", "desc": "+1 Shield."},
-    "XP_Boost": {"cost": 1000, "type": "consumable", "desc": "Level up faster."}
-}
+# --- 2. DUNGEON CLASSES ---
 
-# --- 3. UI COMPONENTS (THE HUB) ---
+class DungeonCombat(discord.ui.View):
+    def __init__(self, ctx, player_data, boss_name, boss_hp, reward):
+        super().__init__(timeout=60)
+        self.ctx = ctx
+        self.player_data = player_data
+        self.boss_name = boss_name
+        self.boss_hp = boss_hp
+        self.reward = reward
+        self.player_hp = player_data["hp"]
 
-class EmpireHubView(discord.ui.View):
+    async def end_game(self, interaction, message):
+        save_data(economy)
+        await interaction.response.edit_message(content=message, view=None)
+
+    @discord.ui.button(label="⚔️ Attack", style=discord.ButtonStyle.danger)
+    async def attack(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.ctx.author.id: return
+        
+        # Player Turn
+        damage = random.randint(self.player_data["atk"] - 2, self.player_data["atk"] + 5)
+        self.boss_hp -= damage
+        
+        if self.boss_hp <= 0:
+            self.player_data["points"] += self.reward
+            self.player_data["dungeon_wins"] += 1
+            self.player_data["xp"] += 50
+            return await self.end_game(interaction, f"🏆 **VICTORY!** You slew the {self.boss_name} and looted **{self.reward:,}** points!")
+
+        # Boss Turn
+        boss_dmg = max(0, random.randint(10, 20) - self.player_data["def"])
+        self.player_hp -= boss_dmg
+        
+        if self.player_hp <= 0:
+            return await self.end_game(interaction, f"💀 **DEFEAT!** The {self.boss_name} struck you down. You lost 200 points to medical bills.")
+
+        await interaction.response.edit_message(content=f"**{self.boss_name} HP:** {self.boss_hp}\n**Your HP:** {self.player_hp}\n\nYou hit for {damage}! Boss hit back for {boss_dmg}!")
+
+# --- 3. MAIN GAME HUB UI ---
+
+class TitanHubView(discord.ui.View):
     def __init__(self, user_id):
         super().__init__(timeout=120)
         self.user_id = user_id
 
+    @discord.ui.button(label="⚔️ Dungeon", style=discord.ButtonStyle.danger, row=0)
+    async def dungeon_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id: return
+        data = get_profile(self.user_id)
+        
+        if data["hp"] <= 20:
+            return await interaction.response.send_message("❌ You are too injured! Heal first.", ephemeral=True)
+            
+        bosses = [("Goblin King", 80, 2000), ("Shadow Dragon", 200, 10000), ("Ancient Golem", 150, 5000)]
+        name, hp, reward = random.choice(bosses)
+        
+        view = DungeonCombat(interaction, data, name, hp, reward)
+        await interaction.response.send_message(f"🏰 **Entering Dungeon...** You encountered **{name}**!", view=view)
+
     @discord.ui.button(label="⚒️ Mine", style=discord.ButtonStyle.blurple, row=0)
     async def mine(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.user_id: return
         data = get_profile(self.user_id)
-        
-        ores = {"Stone": 15, "Iron": 60, "Gold": 300, "Diamond": 1500}
-        found = random.choices(list(ores.keys()), weights=[60, 25, 10, 5])[0]
-        
-        # Pickaxe Bonus
-        bonus = 2.0 if "Iron_Pickaxe" in data["inventory"] else 1.0
-        reward = int(ores[found] * data["multi"] * bonus)
-        
+        reward = int(random.randint(50, 300) * data["multi"])
         data["points"] += reward
         save_data(economy)
-        await interaction.response.send_message(f"⛏️ **{found}**! You earned **{reward:,}** points.", ephemeral=True)
+        await interaction.response.send_message(f"⛏️ Mined ores worth **{reward}** points!", ephemeral=True)
 
-    @discord.ui.button(label="🎣 Fish", style=discord.ButtonStyle.primary, row=0)
-    async def fish(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.user_id: return
+    @discord.ui.button(label="🏥 Heal (500)", style=discord.ButtonStyle.green, row=1)
+    async def heal(self, interaction: discord.Interaction, button: discord.ui.Button):
         data = get_profile(self.user_id)
-        
-        fish_types = {"👞 Boot": 5, "🐟 Bass": 40, "🐠 Tropical": 120, "🦈 Shark": 800}
-        caught = random.choices(list(fish_types.keys()), weights=[30, 50, 15, 5])[0]
-        
-        reward = int(fish_types[caught] * data["multi"])
-        data["points"] += reward
-        data["fish_caught"] += 1
+        if data["points"] < 500:
+            return await interaction.response.send_message("❌ Not enough points!", ephemeral=True)
+        data["points"] -= 500
+        data["hp"] = data["max_hp"]
         save_data(economy)
-        await interaction.response.send_message(f"🎣 Caught a **{caught}**! Earned **{reward:,}** points.", ephemeral=True)
+        await interaction.response.send_message("❤️ Healed to max HP!", ephemeral=True)
 
-    @discord.ui.button(label="🛒 Shop", style=discord.ButtonStyle.gray, row=1)
-    async def shop_info(self, interaction: discord.Interaction, button: discord.ui.Button):
-        msg = "**AVAILABLE ITEMS:**\n"
-        for name, info in ITEMS.items():
-            msg += f"• `{name}`: {info['cost']} pts - *{info['desc']}*\n"
-        await interaction.response.send_message(msg, ephemeral=True)
-
-# --- 4. MULTIPLAYER CASINO ---
-
-class BlackjackView(discord.ui.View):
-    def __init__(self, ctx, bet):
-        super().__init__(timeout=60)
-        self.ctx = ctx
-        self.bet = bet
-        self.user_hand = [random.randint(2, 11), random.randint(2, 11)]
-        self.dealer_hand = [random.randint(2, 11), random.randint(2, 11)]
-
-    def score(self, hand):
-        s = sum(hand)
-        if s > 21 and 11 in hand:
-            hand[hand.index(11)] = 1
-            return sum(hand)
-        return s
-
-    @discord.ui.button(label="Hit", style=discord.ButtonStyle.green)
-    async def hit(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.user_hand.append(random.randint(2, 11))
-        if self.score(self.user_hand) > 21:
-            await self.finish(interaction, "❌ BUSTED!")
-        else:
-            await self.update(interaction)
-
-    @discord.ui.button(label="Stand", style=discord.ButtonStyle.red)
-    async def stand(self, interaction: discord.Interaction, button: discord.ui.Button):
-        while self.score(self.dealer_hand) < 17:
-            self.dealer_hand.append(random.randint(2, 11))
-        
-        u = self.score(self.user_hand)
-        d = self.score(self.dealer_hand)
-        prof = get_profile(self.ctx.author.id)
-
-        if d > 21 or u > d:
-            msg = f"🏆 WIN! +{self.bet*2}"
-            prof["points"] += self.bet * 2
-        elif u < d:
-            msg = "💀 LOSE!"
-        else:
-            msg = "⚖️ PUSH!"
-            prof["points"] += self.bet
-        
-        save_data(economy)
-        await self.finish(interaction, msg)
-
-    async def update(self, interaction):
-        emb = discord.Embed(title="🃏 Blackjack", description=f"Score: {self.score(self.user_hand)}")
-        await interaction.response.edit_message(embed=emb)
-
-    async def finish(self, interaction, res):
-        emb = discord.Embed(title="🃏 Game Results", description=f"**{res}**\n\nUser: {self.user_hand}\nDealer: {self.dealer_hand}")
-        await interaction.response.edit_message(embed=emb, view=None)
-
-# --- 5. CORE COMMANDS ---
+# --- 4. COMMANDS ---
 
 @bot.command()
 async def hub(ctx):
     data = get_profile(ctx.author.id)
-    embed = discord.Embed(title=f"🏰 {ctx.author.name}'s Empire Hub", color=0x2f3136)
+    embed = discord.Embed(title=f"🏰 Titan RPG Hub", color=0xcc0000)
     embed.add_field(name="💰 Points", value=f"{data['points']:,}", inline=True)
-    embed.add_field(name="⭐ Level", value=data["level"], inline=True)
-    embed.add_field(name="🛡️ Shields", value=data["shields"], inline=True)
-    
-    view = EmpireHubView(ctx.author.id)
-    await ctx.send(embed=embed, view=view)
+    embed.add_field(name="❤️ HP", value=f"{data['hp']}/{data['max_hp']}", inline=True)
+    embed.add_field(name="⚔️ ATK/DEF", value=f"{data['atk']}/{data['def']}", inline=True)
+    embed.set_footer(text="Join a Dungeon or work for points!")
+    await ctx.send(embed=embed, view=TitanHubView(ctx.author.id))
 
 @bot.command()
-async def buy(ctx, item_name: str):
+async def set_class(ctx, choice: str):
     data = get_profile(ctx.author.id)
-    if item_name not in ITEMS:
-        return await ctx.send("❌ That item isn't in the shop!")
+    if data["class"]: return await ctx.send("❌ You already have a class!")
     
-    cost = ITEMS[item_name]["cost"]
-    if data["points"] < cost:
-        return await ctx.send("❌ You cannot afford this!")
-    
-    data["points"] -= cost
-    if ITEMS[item_name]["type"] == "tool":
-        data["inventory"].append(item_name)
-    elif item_name == "Shield_Battery":
-        data["shields"] += 1
+    choice = choice.lower()
+    if choice == "warrior":
+        data["class"], data["atk"], data["def"] = "Warrior", 15, 10
+    elif choice == "mage":
+        data["class"], data["atk"], data["def"] = "Mage", 25, 2
+    else:
+        return await ctx.send("❌ Choose: `!set_class warrior` or `!set_class mage`")
         
     save_data(economy)
-    await ctx.send(f"✅ Successfully bought **{item_name}**!")
-
-@bot.command()
-async def hunt(ctx):
-    data = get_profile(ctx.author.id)
-    if "Hunting_Rifle" not in data["inventory"]:
-        return await ctx.send("❌ You need to buy a `Hunting_Rifle` first!")
-    
-    animals = {"🐇 Rabbit": 100, "🦌 Deer": 400, "🐻 Bear": 1200, "🐉 Dragon": 5000}
-    found = random.choices(list(animals.keys()), weights=[50, 30, 15, 5])[0]
-    
-    reward = int(animals[found] * data["multi"])
-    data["points"] += reward
-    data["animals_hunted"] += 1
-    save_data(economy)
-    await ctx.send(f"🌲 You went into the woods and hunted a **{found}**! +{reward:,} pts")
-
-@bot.command()
-async def top(ctx):
-    sorted_p = sorted(economy.items(), key=lambda x: x[1]['points'], reverse=True)[:10]
-    desc = ""
-    for i, (uid, d) in enumerate(sorted_p):
-        desc += f"**#{i+1}** <@{uid}> - {d['points']:,} pts\n"
-    await ctx.send(embed=discord.Embed(title="🏆 Global Wealth", description=desc))
+    await ctx.send(f"⚔️ You are now a **{data['class']}**!")
 
 @bot.command()
 async def rob(ctx, target: discord.Member):
-    if target.id == ctx.author.id: return
     atk = get_profile(ctx.author.id)
     vic = get_profile(target.id)
-    
     if vic["shields"] > 0:
         vic["shields"] -= 1
-        atk["points"] -= 1000
-        save_data(economy)
-        return await ctx.send(f"🛡️ {target.name}'s shield broke! You were fined 1k.")
+        return await ctx.send("🛡️ Shield blocked!")
     
-    if random.random() < 0.35:
-        stolen = int(vic["points"] * 0.2)
+    if random.random() < 0.3:
+        stolen = int(vic["points"] * 0.15)
         vic["points"] -= stolen
         atk["points"] += stolen
-        await ctx.send(f"🥷 **SUCCESS!** Stole **{stolen:,}** points!")
+        await ctx.send(f"🥷 Stole **{stolen}** points!")
     else:
-        await ctx.send("🚓 **BUSTED!** You fled the scene.")
+        await ctx.send("👮 Busted!")
     save_data(economy)
-
-# --- 6. ADMIN SYSTEM ---
 
 @bot.command()
-@commands.has_permissions(administrator=True)
-async def give_points(ctx, target: discord.Member, amount: int):
-    data = get_profile(target.id)
-    data["points"] += amount
-    save_data(economy)
-    await ctx.send(f"💳 Added **{amount:,}** to {target.name}'s balance.")
+async def top(ctx):
+    sorted_db = sorted(economy.items(), key=lambda x: x[1]['points'], reverse=True)[:10]
+    desc = "\n".join([f"**#{i+1}** <@{u}>: {d['points']:,}" for i, (u, d) in enumerate(sorted_db)])
+    await ctx.send(embed=discord.Embed(title="🏆 Global Wealth", description=desc))
 
-# --- 7. AUTOMATION & READY ---
-
-@tasks.loop(hours=1)
-async def hourly_bonus():
-    # Passive income for everyone online
-    for uid in economy:
-        economy[uid]["points"] += 100
-    save_data(economy)
+# --- 5. INITIALIZATION ---
 
 @bot.event
 async def on_ready():
-    hourly_bonus.start()
-    print(f"🔥 {bot.user.name} IS LIVE (600+ LOGIC ENGINE)")
+    print(f"🔥 SYSTEM ACTIVE: {bot.user.name}")
 
-# ----------------------------------------------------------------
-# TOKEN: RESET IN DEV PORTAL AND PASTE BELOW
-# ----------------------------------------------------------------
-bot.run('PASTE_NEW_TOKEN_HERE')
+# --- TOKEN ---
+# RESET YOUR TOKEN IN THE PORTAL AND PASTE IT BELOW
+bot.run('PASTE_YOUR_NEW_TOKEN_HERE')
