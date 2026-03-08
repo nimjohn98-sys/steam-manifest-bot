@@ -4,6 +4,7 @@ from discord.ext import commands
 import json
 import os
 import random
+import asyncio
 from datetime import datetime, timedelta
 
 # ==========================================
@@ -16,21 +17,31 @@ CONFIG_FILE = "server_config.json"
 class EconomyBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
-        intents.message_content = True  # CRITICAL for !sync to work
+        intents.message_content = True 
         intents.members = True
         intents.manage_roles = True
         super().__init__(command_prefix="!", intents=intents, help_command=None)
 
     async def setup_hook(self):
-        # Register the group but don't force sync here (use !sync instead)
+        # Attach the Minigame Group to the Tree
         self.tree.add_command(minigames_group)
-        print(f"✅ Bot logged in as {self.user}")
+        print("🛠️  Commands added to internal tree...")
+
+    async def on_ready(self):
+        print(f'🚀 Logged in as {self.user} (ID: {self.user.id})')
+        # This forces the commands to update every time the bot starts
+        try:
+            synced = await self.tree.sync()
+            print(f"✅ Successfully synced {len(synced)} global slash commands.")
+        except Exception as e:
+            print(f"❌ Failed to sync commands: {e}")
+        print('------')
 
 bot = EconomyBot()
-minigames_group = app_commands.Group(name="minigames", description="All ways to play and earn!")
+minigames_group = app_commands.Group(name="minigames", description="All gaming and earning commands")
 
 # ==========================================
-# DATABASE HELPERS
+# DATABASE LOGIC
 # ==========================================
 def get_data(file):
     if not os.path.exists(file): return {}
@@ -48,24 +59,22 @@ def init_user(db, uid):
     return db[uid]
 
 # ==========================================
-# ⚡ THE AGGRESSIVE SYNC COMMAND
+# SYNC COMMAND (The "Emergency" Button)
 # ==========================================
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def sync(ctx):
-    """Force syncs slash commands to this specific server."""
-    await ctx.send("🔄 **Force Syncing...** This pushes commands directly to this server's cache.")
+    """Type !sync to force refresh slash commands for this server."""
+    await ctx.send("🔄 **Force-syncing commands to this guild...**")
     try:
         bot.tree.copy_global_to(guild=ctx.guild)
         synced = await bot.tree.sync(guild=ctx.guild)
-        print(f"User {ctx.author} triggered sync. {len(synced)} commands synced.")
-        await ctx.send(f"✅ **Success!** {len(synced)} commands are now live. \n\n**IMPORTANT:** If you don't see `/minigames` yet, you must restart your Discord app (Ctrl+R).")
+        await ctx.send(f"✅ Synced {len(synced)} commands to this server! Refresh Discord (Ctrl+R) if they don't appear.")
     except Exception as e:
-        print(f"Sync Error: {e}")
-        await ctx.send(f"❌ **Sync Failed:** `{e}`")
+        await ctx.send(f"❌ Sync Error: {e}")
 
 # ==========================================
-# BLACKJACK LOGIC
+# BLACKJACK GAME
 # ==========================================
 def calc_hand(hand):
     val, aces = 0, 0
@@ -123,9 +132,10 @@ class BlackjackView(discord.ui.View):
         await interaction.response.edit_message(content=f"**{res}**", embed=self.get_embed(True), view=None)
 
 # ==========================================
-# MINIGAMES COMMANDS
+# MINIGAMES GROUP COMMANDS
 # ==========================================
-@minigames_group.command(name="blackjack", description="Play a hand of Blackjack")
+
+@minigames_group.command(name="blackjack", description="Play a game of Blackjack")
 async def bj(interaction: discord.Interaction, bet: int):
     db = get_data(DATA_FILE)
     user = init_user(db, str(interaction.user.id))
@@ -141,27 +151,27 @@ async def daily(interaction: discord.Interaction):
     user = init_user(db, str(interaction.user.id))
     now = datetime.now()
     if user.get("last_daily") and now < datetime.fromisoformat(user["last_daily"]) + timedelta(days=1):
-        return await interaction.response.send_message("⏳ You've already claimed your daily points!", ephemeral=True)
+        return await interaction.response.send_message("⏳ Already claimed! Try again tomorrow.", ephemeral=True)
     user["points"] += 500
     user["last_daily"] = now.isoformat()
     save_data(DATA_FILE, db)
-    await interaction.response.send_message("🎁 **+500 points!** See you tomorrow.")
+    await interaction.response.send_message("🎁 **+500 points!**")
 
-@minigames_group.command(name="koth", description="Overthrow the current King for 3x chat earnings")
+@minigames_group.command(name="koth", description="Become the King for 3x chat earnings")
 async def koth(interaction: discord.Interaction):
     db = get_data(DATA_FILE)
     if "koth" not in db: db["koth"] = {"king": None, "price": 1000}
     uid = str(interaction.user.id)
     price = db["koth"]["price"]
     user = init_user(db, uid)
-    if user["points"] < price: return await interaction.response.send_message(f"❌ You need {price:,} points to overthrow the King.", ephemeral=True)
+    if user["points"] < price: return await interaction.response.send_message(f"❌ You need {price} pts to overthrow.", ephemeral=True)
     user["points"] -= price
     db["koth"]["king"] = uid
     db["koth"]["price"] += 500
     save_data(DATA_FILE, db)
-    await interaction.response.send_message(f"👑 **{interaction.user.mention} IS THE NEW KING!** (3x Points per message)")
+    await interaction.response.send_message(f"👑 **{interaction.user.mention} is the NEW KING!** (3x Chat Points)")
 
-@minigames_group.command(name="lottery", description="Buy a lottery ticket for 100 points")
+@minigames_group.command(name="lottery", description="Buy a ticket for 100 points")
 async def lottery(interaction: discord.Interaction):
     db = get_data(DATA_FILE)
     user = init_user(db, str(interaction.user.id))
@@ -170,42 +180,30 @@ async def lottery(interaction: discord.Interaction):
     user["points"] -= 100
     db["lottery"].append(str(interaction.user.id))
     save_data(DATA_FILE, db)
-    await interaction.response.send_message(f"🎟️ Ticket bought! Total Pot: **{len(db['lottery']) * 100:,}** points.")
+    await interaction.response.send_message(f"🎟️ Ticket bought! Pot: **{len(db['lottery']) * 100}** points.")
 
 # ==========================================
-# ADMIN & SHOP COMMANDS
+# SHOP & PROFILE
 # ==========================================
-@bot.tree.command(name="draw_lottery", description="[ADMIN] Pick a lottery winner")
-@app_commands.checks.has_permissions(administrator=True)
-async def draw_lottery(interaction: discord.Interaction):
-    db = get_data(DATA_FILE)
-    if "lottery" not in db or not db["lottery"]: return await interaction.response.send_message("❌ No tickets sold.", ephemeral=True)
-    winner_id = random.choice(db["lottery"])
-    jackpot = len(db["lottery"]) * 100
-    winner_data = init_user(db, winner_id)
-    winner_data["points"] += jackpot
-    db["lottery"] = []
-    save_data(DATA_FILE, db)
-    await interaction.response.send_message(f"🎊 **LOTTERY DRAWN!** <@{winner_id}> won **{jackpot:,}** points!")
 
-@bot.tree.command(name="setup", description="Admin: Add a role to the shop")
+@bot.tree.command(name="setup", description="Admin: Add roles to the shop")
 @app_commands.checks.has_permissions(administrator=True)
 async def setup(interaction: discord.Interaction, role: discord.Role, price: int):
     cfg = get_data(CONFIG_FILE)
     if "roles" not in cfg: cfg["roles"] = {}
     cfg["roles"][str(role.id)] = {"name": role.name, "price": price}
     save_data(CONFIG_FILE, cfg)
-    await interaction.response.send_message(f"✅ Added {role.name} to shop for {price:,} points.")
+    await interaction.response.send_message(f"✅ Added {role.name} to shop for {price} pts.")
 
-@bot.tree.command(name="shop", description="View available roles for purchase")
+@bot.tree.command(name="shop", description="View and buy roles")
 async def shop(interaction: discord.Interaction):
     cfg = get_data(CONFIG_FILE)
-    embed = discord.Embed(title="🛒 Server Shop", color=0xf1c40f)
-    roles = "".join([f"• <@&{r}>: {i['price']:,} pts\n" for r, i in cfg.get("roles", {}).items()])
-    embed.add_field(name="Available Roles", value=roles or "Shop is empty.")
+    embed = discord.Embed(title="🛒 Shop", color=0xf1c40f)
+    roles = "".join([f"• <@&{r}>: {i['price']} pts\n" for r, i in cfg.get("roles", {}).items()])
+    embed.add_field(name="Available Roles", value=roles or "None.")
     await interaction.response.send_message(embed=embed)
 
-@bot.tree.command(name="profile", description="Check your points and stats")
+@bot.tree.command(name="profile", description="Check points and stats")
 async def profile(interaction: discord.Interaction, member: discord.Member = None):
     member = member or interaction.user
     db = get_data(DATA_FILE)
@@ -216,15 +214,11 @@ async def profile(interaction: discord.Interaction, member: discord.Member = Non
     await interaction.response.send_message(embed=embed)
 
 # ==========================================
-# POINT EARNING EVENT
+# CHAT EARNINGS
 # ==========================================
 @bot.event
 async def on_message(message):
     if message.author.bot or message.guild is None: return
-    
-    # Debug print: See if bot is hearing messages
-    print(f"📩 Message from {message.author}: {message.content}")
-    
     db = get_data(DATA_FILE)
     uid = str(message.author.id)
     user = init_user(db, uid)
