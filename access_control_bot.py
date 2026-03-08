@@ -1,141 +1,209 @@
 import discord
 from discord.ext import commands
-import zipfile
-import io
-import requests
-import urllib.parse
+import json
+import os
+import random
+import asyncio
+from datetime import datetime, timedelta
 
-# --- CONFIGURATION ---
+# ==========================================
+# CONFIGURATION
+# ==========================================
 TOKEN = 'MTQ3NjYwNTAxMDUwMTQzOTU0OA.GKeB4T.7DZq4z7p56d3CxnJRzM4AQ8fMWmtp8LCkdM2yg'
+DATA_FILE = "steam_data.json"
 
-# Exact names from your Discord server
-TARGET_CHANNEL_NAME = "🗣️║manifest"
-REQUIRED_ROLE = "Level 15+"
-INFINITE_ROLES = ["Owner", "Founder", "Admin"]
-STANDARD_LIMIT = 20
+class SteamBot(commands.Bot):
+    def __init__(self):
+        intents = discord.Intents.default()
+        intents.message_content = True 
+        intents.members = True
+        super().__init__(command_prefix="!", intents=intents, help_command=None)
 
-# --- BOT SETUP ---
-intents = discord.Intents.default()
-intents.message_content = True  # Required to read !gen
-intents.members = True          # Required to check Level 15+ role
-bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
+    async def on_ready(self):
+        print(f'🚀 STEAM ENGINE ONLINE: {self.user}')
+        print('>> Type !steam to open the Dashboard.')
 
-def get_game_name(appid):
-    try:
-        url = f"https://store.steampowered.com/api/appdetails?appids={appid}&filters=basic"
-        r = requests.get(url, timeout=5).json()
-        if r and r.get(str(appid), {}).get('success'):
-            return r[str(appid)]['data']['name']
-    except:
-        pass
-    return "Steam_Game"
+bot = SteamBot()
 
-# --- PERMISSION & CHANNEL CHECK ---
-def has_permission():
-    async def predicate(ctx):
-        user_roles = [role.name for role in ctx.author.roles]
-        is_staff = any(r in user_roles for r in INFINITE_ROLES)
-        
-        # 1. Check Channel (Staff can bypass)
-        if ctx.channel.name != TARGET_CHANNEL_NAME and not is_staff:
-            return False 
+# ==========================================
+# DATA SYSTEM (The Manifest)
+# ==========================================
+def load_db():
+    if not os.path.exists(DATA_FILE): return {}
+    with open(DATA_FILE, "r") as f:
+        return json.load(f)
 
-        # 2. Check Role
-        if REQUIRED_ROLE in user_roles or is_staff:
-            return True
-        
-        await ctx.send(f"⚠️ **Access Denied:** You must be `{REQUIRED_ROLE}` to use this bot.")
-        return False
-    return commands.check(predicate)
+def save_db(data):
+    with open(DATA_FILE, "w") as f:
+        json.dump(data, f, indent=4)
 
-# --- COOLDOWN LOGIC ---
-def custom_cooldown(msg):
-    if any(role.name in INFINITE_ROLES for role in msg.author.roles):
-        return None # No limit for Owners/Founders
-    return commands.Cooldown(STANDARD_LIMIT, 86400) # 20 per 24 hours
+def get_user(uid):
+    db = load_db()
+    uid = str(uid)
+    if uid not in db:
+        db[uid] = {
+            "points": 2500,
+            "inventory": ["Welcome Badge"],
+            "stats": {"wins": 0, "losses": 0, "total_bet": 0},
+            "last_daily": None
+        }
+        save_db(db)
+    return db[uid]
 
-@bot.event
-async def on_ready():
-    print(f'🚀 Bot Online: {bot.user}')
-    print(f'🔒 Locked to Channel: {TARGET_CHANNEL_NAME}')
-    print(f'🛡️ Required Role: {REQUIRED_ROLE}')
+def update_user(uid, data):
+    db = load_db()
+    db[str(uid)] = data
+    save_db(db)
 
-@bot.command()
-@has_permission()
-async def help(ctx):
-    embed = discord.Embed(title="🎮 SteamTools Manifest Bot", color=0x2ecc71)
-    embed.add_field(name="`!search [name]`", value="Find a Game's AppID.", inline=False)
-    embed.add_field(name="`!gen [appid]`", value="Generate the ZIP pack.", inline=False)
-    embed.description = (
-        f"**Limits:**\n• {REQUIRED_ROLE}: {STANDARD_LIMIT}/day\n"
-        "• Owners/Founders: Infinite\n\n"
-        "**Install:** Close Steam -> Open ZIP -> Drag folders to Steam directory."
-    )
-    await ctx.send(embed=embed)
+# ==========================================
+# ADVANCED GUI - BLACKJACK
+# ==========================================
+class BlackjackGUI(discord.ui.View):
+    def __init__(self, ctx, bet):
+        super().__init__(timeout=60)
+        self.ctx = ctx
+        self.bet = bet
+        self.deck = [v for v in ['2','3','4','5','6','7','8','9','10','J','Q','K','A'] for _ in range(4)]
+        random.shuffle(self.deck)
+        self.player = [self.deck.pop(), self.deck.pop()]
+        self.dealer = [self.deck.pop(), self.deck.pop()]
 
-@bot.command()
-@has_permission()
-async def search(ctx, *, query: str):
-    url = f"https://store.steampowered.com/api/storesearch/?term={urllib.parse.quote(query)}&l=english&cc=US"
-    try:
-        r = requests.get(url, timeout=5).json()
-        if r.get('items'):
-            game = r['items'][0]
-            await ctx.send(f"🔍 **Result:** {game['name']} | AppID: `{game['id']}`\nType `!gen {game['id']}` to get files.")
+    def get_score(self, hand):
+        val, aces = 0, 0
+        for card in hand:
+            if card in ['J','Q','K']: val += 10
+            elif card == 'A': val += 11; aces += 1
+            else: val += int(card)
+        while val > 21 and aces: val -= 10; aces -= 1
+        return val
+
+    def create_embed(self, closed=True):
+        embed = discord.Embed(title="🃏 Steam Blackjack", color=0x1b2838)
+        embed.add_field(name="Your Hand", value=f"{' '.join(self.player)}\nScore: {self.get_score(self.player)}", inline=True)
+        dealer_display = f"{self.dealer[0]} ❓" if closed else f"{' '.join(self.dealer)}\nScore: {self.get_score(self.dealer)}"
+        embed.add_field(name="Dealer", value=dealer_display, inline=True)
+        return embed
+
+    @discord.ui.button(label="Hit", style=discord.ButtonStyle.blurple)
+    async def hit(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.ctx.author: return
+        self.player.append(self.deck.pop())
+        if self.get_score(self.player) > 21:
+            await self.finish(interaction, "BUST! Dealer Wins.", False)
         else:
-            await ctx.send("❌ No game found on Steam.")
-    except:
-        await ctx.send("⚠️ Steam search is lagging. Try again.")
+            await interaction.response.edit_message(embed=self.create_embed())
+
+    @discord.ui.button(label="Stand", style=discord.ButtonStyle.gray)
+    async def stand(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.ctx.author: return
+        while self.get_score(self.dealer) < 17:
+            self.dealer.append(self.deck.pop())
+        
+        p_score = self.get_score(self.player)
+        d_score = self.get_score(self.dealer)
+        
+        if d_score > 21 or p_score > d_score:
+            await self.finish(interaction, "YOU WIN!", True)
+        elif p_score < d_score:
+            await self.finish(interaction, "Dealer Wins.", False)
+        else:
+            await self.finish(interaction, "PUSH (Tie).", None)
+
+    async def finish(self, interaction, result, won):
+        user_data = get_user(self.ctx.author.id)
+        if won is True: user_data["points"] += self.bet * 2
+        elif won is None: user_data["points"] += self.bet
+        update_user(self.ctx.author.id, user_data)
+        self.stop()
+        await interaction.response.edit_message(content=f"**{result}**", embed=self.create_embed(False), view=None)
+
+# ==========================================
+# MAIN DASHBOARD (The Steam Hub)
+# ==========================================
+class SteamDashboard(discord.ui.View):
+    def __init__(self, ctx):
+        super().__init__(timeout=120)
+        self.ctx = ctx
+
+    @discord.ui.button(label="My Profile", style=discord.ButtonStyle.gray, emoji="👤")
+    async def profile(self, interaction: discord.Interaction, button: discord.ui.Button):
+        user = get_user(interaction.user.id)
+        embed = discord.Embed(title=f"Steam Profile: {interaction.user.display_name}", color=0x66c0f4)
+        embed.set_thumbnail(url=interaction.user.display_avatar.url)
+        embed.add_field(name="Wallet Balance", value=f"🪙 {user['points']:,} pts", inline=False)
+        embed.add_field(name="Manifest (Inventory)", value=", ".join(user['inventory']) or "Empty", inline=False)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @discord.ui.button(label="Play Blackjack", style=discord.ButtonStyle.green, emoji="🃏")
+    async def play_bj(self, interaction: discord.Interaction, button: discord.ui.Button):
+        user = get_user(interaction.user.id)
+        if user["points"] < 100:
+            return await interaction.response.send_message("❌ Insufficient funds (Min 100).", ephemeral=True)
+        user["points"] -= 100
+        update_user(interaction.user.id, user)
+        view = BlackjackGUI(self.ctx, 100)
+        await interaction.response.send_message(embed=view.create_embed(), view=view)
+
+    @discord.ui.button(label="Spin Slots", style=discord.ButtonStyle.blurple, emoji="🎰")
+    async def play_slots(self, interaction: discord.Interaction, button: discord.ui.Button):
+        user = get_user(interaction.user.id)
+        if user["points"] < 50:
+            return await interaction.response.send_message("❌ Insufficient funds (Min 50).", ephemeral=True)
+        
+        user["points"] -= 50
+        icons = ["💎", "🍒", "🍋", "🔔", "⭐"]
+        res = [random.choice(icons) for _ in range(3)]
+        
+        win = 0
+        if res[0] == res[1] == res[2]: win = 1000 if res[0] == "💎" else 500
+        elif res[0] == res[1] or res[1] == res[2]: win = 100
+        
+        user["points"] += win
+        update_user(interaction.user.id, user)
+        result_text = f"🎰 **{' | '.join(res)}** 🎰\n" + (f"✅ You won **{win}**!" if win > 0 else "❌ No luck.")
+        await interaction.response.send_message(result_text)
+
+    @discord.ui.button(label="Claim Daily", style=discord.ButtonStyle.primary, emoji="🎁")
+    async def daily(self, interaction: discord.Interaction, button: discord.ui.Button):
+        user = get_user(interaction.user.id)
+        now = datetime.now()
+        if user["last_daily"] and now < datetime.fromisoformat(user["last_daily"]) + timedelta(days=1):
+            return await interaction.response.send_message("⏳ Already claimed! Come back later.", ephemeral=True)
+        
+        user["points"] += 500
+        user["last_daily"] = now.isoformat()
+        update_user(interaction.user.id, user)
+        await interaction.response.send_message("🎁 **+500 points** added to your Steam Wallet!")
+
+# ==========================================
+# COMMANDS
+# ==========================================
+@bot.command()
+async def steam(ctx):
+    """Opens the Steam Dashboard GUI"""
+    embed = discord.Embed(
+        title="🎮 Steam Gaming Manifest",
+        description="Welcome to the digital library. Manage your inventory and gamble your wallet points below.",
+        color=0x171a21
+    )
+    embed.set_image(url="https://i.imgur.com/vH9Yn2P.png") # Steam-like header
+    await ctx.send(embed=embed, view=SteamDashboard(ctx))
 
 @bot.command()
-@has_permission()
-@commands.dynamic_cooldown(custom_cooldown, commands.BucketType.user)
-async def gen(ctx, appid: str):
-    if not appid.isdigit():
-        ctx.command.reset_cooldown(ctx)
-        return await ctx.send("❌ Please provide a numeric AppID.")
-
-    async with ctx.typing():
-        try:
-            name = get_game_name(appid)
-            
-            # THE FIX: Forces Steam to see the game as 100% installed
-            acf_content = f""" "AppState"
-{{
-    "appid" "{appid}"
-    "Universe" "1"
-    "name" "{name}"
-    "StateFlags" "4"
-    "installdir" "{name}"
-    "LastOwner" "0"
-    "UpdateResult" "0"
-    "BytesToDownload" "0"
-    "BytesDownloaded" "0"
-    "AutoUpdateBehavior" "0"
-}}"""
-
-            manifest_content = f'{{ "appmanifest": {{ "appid": "{appid}", "name": "{name}", "StateFlags": "4" }} }}'
-
-            # Build ZIP with Zero-Work folders
-            zip_buffer = io.BytesIO()
-            with zipfile.ZipFile(zip_buffer, "w") as zf:
-                zf.writestr(f"steamapps/appmanifest_{appid}.acf", acf_content)
-                zf.writestr(f"manifests/{appid}.manifest", manifest_content)
-            
-            zip_buffer.seek(0)
-            file = discord.File(fp=zip_buffer, filename=f"SteamPack_{appid}.zip")
-            await ctx.send(f"✅ **{name}** (AppID: {appid})\nDownload and drag the folders into your Steam directory.", file=file)
-            
-        except Exception as e:
-            await ctx.send(f"⚠️ Error generating files: {str(e)}")
+@commands.has_permissions(administrator=True)
+async def give_points(ctx, member: discord.Member, amount: int):
+    user = get_user(member.id)
+    user["points"] += amount
+    update_user(member.id, user)
+    await ctx.send(f"✅ Transferred **{amount:,}** points to {member.mention}'s Wallet.")
 
 @bot.event
-async def on_command_error(ctx, error):
-    if isinstance(error, commands.CommandOnCooldown):
-        await ctx.send(f"⏳ **Limit Reached:** You can only generate {STANDARD_LIMIT} games per day.")
-    elif isinstance(error, commands.CheckFailure):
-        pass # Ignored because has_permission() sends its own message
-    else:
-        print(f"Error: {error}")
+async def on_message(message):
+    if message.author.bot: return
+    # Passive chat earning
+    user = get_user(message.author.id)
+    user["points"] += 2 
+    update_user(message.author.id, user)
+    await bot.process_commands(message)
 
 bot.run(TOKEN)
