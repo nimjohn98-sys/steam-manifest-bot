@@ -2,160 +2,149 @@ import discord
 from discord.ext import commands
 import random
 import asyncio
-from datetime import datetime, timedelta
 
 # ==========================================
-# ⚙️ GLOBAL ENGINE CONFIG
+# ⚙️ GLOBAL REALITY ENGINE
 # ==========================================
 TOKEN = 'MTQ3NjYwNTAxMDUwMTQzOTU0OA.GKeB4T.7DZq4z7p56d3CxnJRzM4AQ8fMWmtp8LCkdM2yg'
 
 DB = {}
-GLOBAL_JACKPOT = 25000
+GLOBAL_JACKPOT = 50000
 KOTH_DATA = {"king_id": None, "king_name": "No One"}
-WIN_TAX = 0.01 
-BEG_COOLDOWN = {}
+WIN_TAX = 0.01 # 1% King Tax
 
 def get_u(uid, name="Trader"):
     uid = str(uid)
-    if uid not in DB: DB[uid] = {"points": 1000, "inv": [], "name": name, "prestige": 0}
+    if uid not in DB: DB[uid] = {"points": 1000, "inv": [], "name": name}
     return DB[uid]
 
 # ==========================================
-# 🎰 THE 100-GAME SELECTOR SYSTEM
+# 🎰 THE UNIVERSAL ODDS CALCULATOR (100 GAMES)
 # ==========================================
-class SectorSelect(discord.ui.Select):
-    def __init__(self, category, games):
-        options = [discord.SelectOption(label=g, description="IRL Odds & Physics") for g in games]
-        super().__init__(placeholder=f"Select from {category}...", options=options)
-
-    async def callback(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(BetModal(self.values[0]))
-
-# ==========================================
-# 📈 THE IRL PAYOUT ENGINE
-# ==========================================
-class BetModal(discord.ui.Modal, title='Steam Exchange: Place Bet'):
-    amount = discord.ui.TextInput(label='Bet Amount', placeholder='100')
-    def __init__(self, game): super().__init__(); self.game = game
+class BetModal(discord.ui.Modal, title='🏦 Steam Global Exchange'):
+    amount = discord.ui.TextInput(label='Enter Bet Amount', placeholder='100')
+    def __init__(self, game_name):
+        super().__init__()
+        self.game = game_name
 
     async def on_submit(self, interaction: discord.Interaction):
         try: bet = int(self.amount.value)
         except: return await interaction.response.send_message("❌ Numbers only.", ephemeral=True)
         
         u = get_u(interaction.user.id, interaction.user.name)
-        if bet <= 0 or u["points"] < bet: return await interaction.response.send_message("❌ Insufficient Funds.", ephemeral=True)
+        if bet <= 0 or u["points"] < bet: return await interaction.response.send_message("❌ Insufficient funds.", ephemeral=True)
         
         u["points"] -= bet
         global GLOBAL_JACKPOT
 
-        # --- REAL WORLD PROBABILITY ENGINE ---
+        # --- REAL WORLD MATH ENGINE ---
+        # We simulate 100 games by mapping the 'game_name' to a Risk Profile
+        
         win = False
-        multi = 2.0
-        msg = f"Playing **{self.game}**..."
+        payout_multi = 2.0
+        
+        # 1. High-Odds / Low Win Rate (Lottery/Slots)
+        if any(x in self.game for x in ["Slots", "Lottery", "Keno", "Jackpot"]):
+            win = random.random() < 0.15 # 15% Win Rate
+            payout_multi = 6.0
+            
+        # 2. Near 50/50 (Roulette/Coinflip/Baccarat)
+        elif any(x in self.game for x in ["Roulette", "Flip", "Baccarat", "Dice"]):
+            win = random.random() < 0.47 # 47% (The 3% House Edge)
+            payout_multi = 2.0
 
-        # Logic for some of the 100 modes:
-        if self.game == "BTC Crash":
-            view = CrashMarket(interaction.user.id, bet)
-            await interaction.response.send_message("📉 Connecting to Exchange...", view=view)
-            m = await interaction.original_response()
-            return bot.loop.create_task(view.run(m))
+        # 3. High Risk / High Reward (Crypto/Crash)
+        elif "Crash" in self.game or "Moon" in self.game:
+            # Trigger the Live Crash View instead of instant math
+            view = LiveCrash(interaction.user.id, bet)
+            await interaction.response.send_message(f"📈 Opening **{self.game}** Market...", view=view)
+            msg = await interaction.original_response()
+            return bot.loop.create_task(view.market_tick(msg))
 
-        elif "Slots" in self.game:
-            win = random.random() < 0.35 # 35% win rate (Vegas Style)
-            multi = 3.0
-        elif "Roulette" in self.game:
-            win = random.random() < (18/38) # American Roulette Odds (47.3%)
-            multi = 2.0
-        elif "Horse" in self.game or "Racing" in self.game:
-            win = random.random() < 0.20 # 1 in 5 chance
-            multi = 4.5
-        elif "Lottery" in self.game:
-            win = random.random() < 0.01 # 1% chance
-            multi = 80.0
+        # 4. Standard Skill/Luck Mix (Blackjack/War)
         else:
-            win = random.random() < 0.48 # Default House Edge
-            multi = 2.0
+            win = random.random() < 0.49
+            payout_multi = 2.0
 
+        # --- SETTLEMENT ---
         if win:
-            gross = int(bet * multi)
-            tax = int(gross * WIN_TAX)
-            net = gross - tax
+            winnings = int(bet * payout_multi)
+            tax = int(winnings * WIN_TAX)
+            net = winnings - tax
             u["points"] += net
             if KOTH_DATA["king_id"]: get_u(KOTH_DATA["king_id"])["points"] += tax
-            await interaction.response.send_message(f"✅ **WIN!** Received {net} pts. (1% Tax to King: {tax})")
+            await interaction.response.send_message(f"✅ **WIN!** You won **{net} pts** on {self.game}! (King Tax: {tax})")
         else:
-            GLOBAL_JACKPOT += int(bet * 0.10)
-            await interaction.response.send_message(f"❌ **LOSS.** {self.game} took your bet. Jackpot: {GLOBAL_JACKPOT}")
+            GLOBAL_JACKPOT += int(bet * 0.10) # 10% of losses go to jackpot
+            await interaction.response.send_message(f"❌ **LOSS.** The House took your {bet} pts on {self.game}.")
 
 # ==========================================
-# 📈 BTC CRASH (CRYPTO MODE)
+# 📈 LIVE CRASH (REAL-TIME BTC LOGIC)
 # ==========================================
-class CrashMarket(discord.ui.View):
+class LiveCrash(discord.ui.View):
     def __init__(self, uid, bet):
         super().__init__(); self.uid, self.bet, self.m, self.active = uid, bet, 1.0, True
-        self.crash = round(random.uniform(1.1, 4.0), 2)
+        self.crash_at = round(random.uniform(1.1, 3.5), 2)
 
-    @discord.ui.button(label="SELL", style=discord.ButtonStyle.green, emoji="💰")
+    @discord.ui.button(label="SELL / CASH OUT", style=discord.ButtonStyle.green, emoji="💰")
     async def sell(self, i, b):
         if not self.active or i.user.id != self.uid: return
         self.active = False
-        gain = int(self.bet * self.m)
-        get_u(self.uid)["points"] += gain
-        await i.response.edit_message(content=f"💰 **SOLD!** Cashed out at {self.m}x. Total: {gain} pts.", view=None)
+        u = get_u(self.uid)
+        u["points"] += int(self.bet * self.m)
+        await i.response.edit_message(content=f"💰 **SOLD!** You cashed out at **{self.m}x** for **{int(self.bet * self.m)} pts**!", view=None)
 
-    async def run(self, msg):
+    async def market_tick(self, msg):
         while self.active:
             await asyncio.sleep(1.5)
-            self.m = round(self.m + 0.2, 1)
-            if self.m >= self.crash:
+            self.m = round(self.m + 0.1, 1)
+            if self.m >= self.crash_at:
                 self.active = False
-                await msg.edit(content=f"💥 **CRASHED!** Market hit 0 at {self.m}x.", view=None)
+                await msg.edit(content=f"📉 **CRASHED!** The market hit 0 at **{self.m}x**. You lost your position.", view=None)
                 break
-            await msg.edit(content=f"📈 **Market Rising...** Current Value: **{self.m}x**")
+            await msg.edit(content=f"📈 **Market Price Rising...** Current Multiplier: **{self.m}x**")
 
 # ==========================================
-# 🖥️ THE INFINITE HUB
+# 🖥️ HUB INTERFACE (5 SECTORS)
 # ==========================================
+class SectorSelect(discord.ui.Select):
+    def __init__(self, label, game_list):
+        options = [discord.SelectOption(label=g) for g in game_list]
+        super().__init__(placeholder=label, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(BetModal(self.values[0]))
+
 class UltimateHub(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
-        # Category 1: Casino (Games 1-20)
-        self.add_item(SectorSelect("Casino Floor", ["Vegas Slots", "Blackjack", "Roulette", "Baccarat", "Craps"]))
-        # Category 2: Crypto (Games 21-40)
-        self.add_item(SectorSelect("Crypto Exchange", ["BTC Crash", "ETH Long", "Doge Flip", "NFT Gamble"]))
-        # Category 3: Sports (Games 41-60)
-        self.add_item(SectorSelect("Sportsbook", ["Horse Racing", "Penalty Kick", "UFC Fight", "NBA Draft"]))
+        # We can define 20 games per selector easily
+        self.add_item(SectorSelect("🎰 Casino Floor", ["Vegas Slots", "Mega Moolah", "Blackjack", "American Roulette", "Baccarat"]))
+        self.add_item(SectorSelect("📈 Crypto Exchange", ["BTC Crash", "ETH Moon", "Doge Flip", "NFT Gamble", "Solana Long"]))
+        self.add_item(SectorSelect("🐎 Sportsbook", ["Horse Racing", "Greyhounds", "UFC Fight", "NBA Draft", "Soccer Penalty"]))
 
-    @discord.ui.button(label="Beg (If 0 Pts)", style=discord.ButtonStyle.gray, row=3)
-    async def beg(self, i, b):
-        u = get_u(i.user.id)
-        if u["points"] > 10: return await i.response.send_message("❌ You aren't broke enough to beg!", ephemeral=True)
-        u["points"] += 50
-        await i.response.send_message("🤏 Someone dropped 50 pts in your hat. Don't spend it all at once.", ephemeral=True)
-
-    @discord.ui.button(label="Claim Hill (500)", style=discord.ButtonStyle.danger, emoji="👑", row=3)
+    @discord.ui.button(label="Claim King (500 pts)", style=discord.ButtonStyle.danger, emoji="👑", row=3)
     async def claim(self, i, b):
         u = get_u(i.user.id)
-        if u["points"] < 500: return await i.response.send_message("❌ Low funds.", ephemeral=True)
+        if u["points"] < 500: return await i.response.send_message("❌ Need 500 pts.", ephemeral=True)
         u["points"] -= 500
         KOTH_DATA["king_id"], KOTH_DATA["king_name"] = i.user.id, i.user.name
-        await i.response.send_message(f"👑 **{i.user.name}** is the new King! Collecting 1% of all wins!")
+        await i.response.send_message(f"👑 **{i.user.name}** is the King! All winners now pay you 1% tax!")
 
 # ==========================================
-# 🚀 LAUNCH
+# 🚀 CORE
 # ==========================================
 bot = commands.Bot(command_prefix="!", intents=discord.Intents.all(), help_command=None)
 
 @bot.event
 async def on_message(m):
-    if not m.author.bot: get_u(m.author.id, m.author.name)["points"] += 1
+    if not m.author.bot: 
+        u = get_u(m.author.id, m.author.name)
+        u["points"] += 1 # Passive income
     await bot.process_commands(m)
 
 @bot.command()
 async def hub(ctx):
-    await ctx.send(f"🌐 **Steam Ultimate v16: The Infinite Floor**\n**King:** {KOTH_DATA['king_name']} | **Jackpot:** {GLOBAL_JACKPOT}", view=UltimateHub())
-
-@bot.event
-async def on_ready(): print(f"✅ V16 Online: 100 Game Simulation Active.")
+    await ctx.send(f"🌐 **Steam Ultimate v17**\n**King:** {KOTH_DATA['king_name']} | **Jackpot:** {GLOBAL_JACKPOT}", view=UltimateHub())
 
 bot.run(TOKEN)
