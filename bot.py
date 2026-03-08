@@ -2,35 +2,65 @@ import discord
 from discord.ext import commands
 import random
 import asyncio
+import json
+import os
 from datetime import datetime, timedelta
 
-# ==========================================
-# ⚙️ GLOBAL CONFIGURATION
-# ==========================================
+# ==============================================================================
+# ⚙️ GLOBAL SYSTEM CONFIGURATION (Line 15)
+# ==============================================================================
 TOKEN = 'MTQ3NjYwNTAxMDUwMTQzOTU0OA.GKeB4T.7DZq4z7p56d3CxnJRzM4AQ8fMWmtp8LCkdM2yg'
 
-# Role ID Mapping: [Role ID, Price]
-ROLE_SHOP_CONFIG = {
+# 20 GAME MECHANICS (Column A)
+MECHANICS = [
+    "Slots", "Roulette", "Crash", "Baccarat", "Blackjack", 
+    "Keno", "Mines", "Plinko", "Dice", "Wheel", 
+    "Video Poker", "Hi-Lo", "Sic Bo", "Red Dog", "Penalty",
+    "Horse Race", "Stock Call", "Shell Game", "Lottery", "Coinflip"
+]
+
+# 20 REALISTIC THEMES (Column B)
+THEMES = [
+    "Vegas", "Tokyo Neon", "Macau", "Crypto", "Underworld", 
+    "Cyberpunk", "Wild West", "Pirate", "Medieval", "Space",
+    "London", "Dubai", "Retro 80s", "Zombie", "Egyptian",
+    "Arctic", "Jungle", "High Roller", "Street", "Royal"
+]
+
+# ROLE PRICING & IDS
+ROLES = {
     "Elite Merchant": [1480196811850252529, 25000],
     "Steam Executive": [1480196317455188100, 50000],
     "Global Monarch": [1480195969416036498, 100000]
 }
 
-# Boost Config: [Price, Multiplier, Duration (mins)]
+# BOOST CONFIG: [Price, Multiplier, DurationMins]
 BOOSTS = {
-    "Bronze Multi (2x)": [5000, 2, 120],
-    "Silver Multi (3x)": [15000, 3, 120],
-    "Gold Multi (5x)": [50000, 5, 120]
+    "Bronze 2x": [5000, 2, 120],
+    "Silver 3x": [15000, 3, 120],
+    "Gold 5x": [50000, 5, 120]
 }
 
 DB = {}
-GLOBAL_JACKPOT = 100000
-KOTH_DATA = {"king_id": None, "king_name": "No One"}
+GLOBAL_JACKPOT = 500000
+KOTH = {"id": None, "name": "No One"}
 
+# ==============================================================================
+# 📊 DATABASE & UTILITIES (Line 60)
+# ==============================================================================
 def get_u(uid, name="User"):
     uid = str(uid)
-    if uid not in DB: 
-        DB[uid] = {"points": 1000, "name": name, "prestige": 0, "boost": 1, "boost_exp": None, "last_daily": None}
+    if uid not in DB:
+        DB[uid] = {
+            "pts": 10000, 
+            "name": name, 
+            "prestige": 0, 
+            "boost": 1, 
+            "boost_exp": None, 
+            "last_daily": None,
+            "wins": 0,
+            "losses": 0
+        }
     return DB[uid]
 
 def check_boost(u):
@@ -39,166 +69,265 @@ def check_boost(u):
         u["boost_exp"] = None
     return u["boost"]
 
-# ==========================================
-# 🎰 REALISTIC GAME MODALS
-# ==========================================
-class RouletteModal(discord.ui.Modal, title='🎡 Realistic Roulette'):
-    bet_type = discord.ui.TextInput(label='Bet (Red, Black, Green, or Number 0-36)', placeholder='Red')
-    amount = discord.ui.TextInput(label='Amount', placeholder='100')
+# ==============================================================================
+# 🎰 UNIVERSAL GAME ENGINE (Line 90)
+# ==============================================================================
+class GlobalBetModal(discord.ui.Modal, title='🎰 Game Entry'):
+    bet_input = discord.ui.TextInput(label='Enter Bet Amount', placeholder='e.g. 500')
+    
+    def __init__(self, theme, mech):
+        super().__init__()
+        self.theme = theme
+        self.mech = mech
 
     async def on_submit(self, i: discord.Interaction):
         try:
-            amt = int(self.amount.value)
-            choice = self.bet_type.value.lower()
-        except: return await i.response.send_message("❌ Use numbers for the amount!", ephemeral=True)
-
-        u = get_u(i.user.id)
-        if u["points"] < amt: return await i.response.send_message("❌ Insufficient funds.", ephemeral=True)
-        u["points"] -= amt
-
-        msg = await i.response.send_message("🎡 **Spinning...**")
-        msg = await i.original_response()
-
-        # Animation
-        for _ in range(3):
-            await asyncio.sleep(0.8)
-            await msg.edit(content=f"🎡 **Spinning...** [{random.randint(0,36)}]")
-
-        res_num = random.randint(0, 36)
-        res_color = "green" if res_num == 0 else ("red" if res_num % 2 != 0 else "black")
+            bet = int(self.bet_input.value)
+        except:
+            return await i.response.send_message("❌ Error: Numbers only.", ephemeral=True)
         
-        win = False
-        if choice == res_color or (choice.isdigit() and int(choice) == res_num):
-            win = True
-            multi = 35 if (choice == "green" or choice.isdigit()) else 2
-            payout = amt * multi
-            tax = int(payout * 0.01)
-            u["points"] += (payout - tax)
-            if KOTH_DATA["king_id"]: get_u(KOTH_DATA["king_id"])["points"] += tax
-            await msg.edit(content=f"✅ **Landed on {res_num} ({res_color})!** You won **{payout-tax} pts**!")
-        else:
-            global GLOBAL_JACKPOT
-            GLOBAL_JACKPOT += int(amt * 0.1)
-            await msg.edit(content=f"❌ **Landed on {res_num} ({res_color}).** House wins.")
+        u = get_u(i.user.id, i.user.name)
+        if bet <= 0 or u["pts"] < bet:
+            return await i.response.send_message("❌ Error: Insufficient points.", ephemeral=True)
+        
+        u["pts"] -= bet
+        global GLOBAL_JACKPOT
 
-# ==========================================
-# 📈 BTC CRASH ENGINE (REAL-TIME)
-# ==========================================
-class CrashView(discord.ui.View):
+        # 🎲 THE PHYSICS SIMULATOR
+        # Different themes have different house edges (Real-Life accuracy)
+        edge = 0.48 if self.theme in ["High Roller", "Royal", "Vegas"] else 0.44
+        
+        # Game-Specific Multipliers
+        multi = 2.0
+        if "Slots" in self.mech: edge = 0.15; multi = 10.0
+        if "Lottery" in self.mech: edge = 0.05; multi = 50.0
+        if "Keno" in self.mech: edge = 0.30; multi = 4.0
+
+        win = random.random() < edge
+        
+        if win:
+            payout = int(bet * multi * check_boost(u))
+            tax = int(payout * 0.01)
+            net = payout - tax
+            u["pts"] += net
+            u["wins"] += 1
+            # King of the Hill Tax
+            if KOTH["id"]: get_u(KOTH["id"])["pts"] += tax
+            await i.response.send_message(f"✅ **WIN!** [{self.theme} {self.mech}]\nYou won **{net} pts**! (Tax: {tax})")
+        else:
+            u["losses"] += 1
+            GLOBAL_JACKPOT += int(bet * 0.1)
+            await i.response.send_message(f"❌ **LOSS.** The **{self.theme}** house took your **{bet} pts**.")
+
+# ==============================================================================
+# 📈 ANIMATED GAME MODULES (Line 140)
+# ==============================================================================
+class CrashGame(discord.ui.View):
     def __init__(self, uid, bet):
-        super().__init__(); self.uid, self.bet, self.m, self.active = uid, bet, 1.0, True
-        self.crash_at = round(random.uniform(1.1, 4.2), 2)
+        super().__init__(timeout=60)
+        self.uid, self.bet, self.m, self.active = uid, bet, 1.0, True
+        self.crash_pt = round(random.uniform(1.2, 5.0), 2)
 
     @discord.ui.button(label="CASH OUT", style=discord.ButtonStyle.green, emoji="💰")
-    async def sell(self, i, b):
-        if not self.active or i.user.id != self.uid: return
+    async def cashout(self, i, b):
+        if i.user.id != self.uid or not self.active: return
         self.active = False
         u = get_u(self.uid)
-        u["points"] += int(self.bet * self.m)
-        await i.response.edit_message(content=f"💰 **Sold at {self.m}x!** +{int(self.bet * self.m)} pts", view=None)
+        win = int(self.bet * self.m)
+        u["pts"] += win
+        await i.response.edit_message(content=f"💰 **SUCCESS!** Exited at **{self.m}x**. Received **{win} pts**.", view=None)
 
-    async def run(self, msg):
+    async def main_loop(self, msg):
         while self.active:
             await asyncio.sleep(1.5)
             self.m = round(self.m + 0.2, 1)
-            if self.m >= self.crash_at:
+            if self.m >= self.crash_pt:
                 self.active = False
-                await msg.edit(content=f"💥 **CRASHED at {self.m}x!** You lost everything.", view=None)
+                await msg.edit(content=f"💥 **CRASHED!** The market collapsed at **{self.m}x**.", view=None)
                 break
-            await msg.edit(content=f"📈 **Market Price: {self.m}x**")
+            await msg.edit(content=f"📈 **Market Rising...** Multiplier: **{self.m}x**")
 
-# ==========================================
-# 🛍️ NAVIGATION & SHOPS
-# ==========================================
+# ==============================================================================
+# 🛍️ SHOP & NAVIGATION (Line 175)
+# ==============================================================================
 class SubMenuView(discord.ui.View):
-    def __init__(self, item_type):
+    def __init__(self, mode):
         super().__init__(timeout=60)
-        if item_type == "roles": self.add_item(RoleSelect())
-        else: self.add_item(BoostSelect())
+        if mode == "roles": self.add_item(RoleSelector())
+        elif mode == "boosts": self.add_item(BoostSelector())
 
-    @discord.ui.button(label="Back", style=discord.ButtonStyle.gray, emoji="⬅️")
+    @discord.ui.button(label="Return to Hub", style=discord.ButtonStyle.gray, emoji="⬅️")
     async def back(self, i, b):
         u = get_u(i.user.id)
-        await i.response.edit_message(content=None, embed=gen_hub_embed(u), view=UltimateHub())
+        await i.response.edit_message(content=None, embed=main_hub_embed(u), view=MainHubView())
 
-class RoleSelect(discord.ui.Select):
+class RoleSelector(discord.ui.Select):
     def __init__(self):
-        options = [discord.SelectOption(label=n, description=f"{d[1]} pts") for n, d in ROLE_SHOP_CONFIG.items()]
-        super().__init__(placeholder="Select a Role...", options=options)
-    async def callback(self, i):
-        u = get_u(i.user.id); name = self.values[0]; rid, price = ROLE_SHOP_CONFIG[name]
-        if u["points"] < price: return await i.response.send_message("❌ No cash.", ephemeral=True)
+        options = [discord.SelectOption(label=n, description=f"Cost: {d[1]} pts") for n, d in ROLES.items()]
+        super().__init__(placeholder="Select a Badge...", options=options)
+
+    async def callback(self, i: discord.Interaction):
+        u = get_u(i.user.id)
+        name = self.values[0]
+        rid, price = ROLES[name]
+        if u["pts"] < price: return await i.response.send_message("❌ Inadequate balance.", ephemeral=True)
         role = i.guild.get_role(rid)
-        try: await i.user.add_roles(role); u["points"] -= price; await i.response.send_message(f"✅ {name} Equipped!", ephemeral=True)
-        except: await i.response.send_message("❌ Role error.", ephemeral=True)
+        try:
+            await i.user.add_roles(role)
+            u["pts"] -= price
+            await i.response.send_message(f"✅ **{name}** has been added to your profile!", ephemeral=True)
+        except:
+            await i.response.send_message("❌ Permission Error: Bot role must be higher.", ephemeral=True)
 
-class BoostSelect(discord.ui.Select):
+class BoostSelector(discord.ui.Select):
     def __init__(self):
-        options = [discord.SelectOption(label=n, description=f"{d[0]} pts") for n, d in BOOSTS.items()]
-        super().__init__(placeholder="Select a Boost...", options=options)
-    async def callback(self, i):
-        u = get_u(i.user.id); name = self.values[0]; p, m, d = BOOSTS[name]
-        if u["points"] < p: return await i.response.send_message("❌ No cash.", ephemeral=True)
-        u["points"] -= p; u["boost"] = m; u["boost_exp"] = datetime.now() + timedelta(minutes=d)
-        await i.response.send_message(f"🚀 {m}x Boost Active!", ephemeral=True)
+        options = [discord.SelectOption(label=n, description=f"{d[1]}x for {d[2]}m") for n, d in BOOSTS.items()]
+        super().__init__(placeholder="Select a Multiplier...", options=options)
 
-# ==========================================
-# 🖥️ THE OMNI HUB
-# ==========================================
-def gen_hub_embed(u):
+    async def callback(self, i: discord.Interaction):
+        u = get_u(i.user.id)
+        name = self.values[0]
+        p, m, d = BOOSTS[name]
+        if u["pts"] < p: return await i.response.send_message("❌ Inadequate balance.", ephemeral=True)
+        u["pts"] -= p
+        u["boost"] = m
+        u["boost_exp"] = datetime.now() + timedelta(minutes=d)
+        await i.response.send_message(f"🚀 **BOOST ON!** {m}x multiplier active for {d} minutes.", ephemeral=True)
+
+# ==============================================================================
+# 🌐 THE MAIN HUB INTERFACE (Line 240)
+# ==============================================================================
+def main_hub_embed(u):
     b_stat = f"{u['boost']}x" if check_boost(u) > 1 else "None"
-    e = discord.Embed(title="🌐 Steam Omni-Hub v25", color=0x1b2838)
-    e.add_field(name="Wallet", value=f"🪙 {u['points']} pts")
-    e.add_field(name="Multiplier", value=f"🚀 {b_stat}")
-    e.add_field(name="King", value=KOTH_DATA["king_name"])
-    e.set_footer(text=f"Prestige: {u['prestige']} | Jackpot: {GLOBAL_JACKPOT}")
+    e = discord.Embed(title="🌐 Steam Global Hub v31", color=0x1b2838, timestamp=datetime.now())
+    e.add_field(name="💰 Wallet", value=f"**{u['pts']} pts**", inline=True)
+    e.add_field(name="🚀 Active Boost", value=f"**{b_stat}**", inline=True)
+    e.add_field(name="👑 King", value=f"**{KOTH['name']}**", inline=True)
+    e.add_field(name="📈 Stats", value=f"Wins: {u['wins']} | Losses: {u['losses']}", inline=False)
+    e.set_footer(text=f"Total Jackpot: {GLOBAL_JACKPOT} pts")
+    e.set_thumbnail(url="https://i.imgur.com/8Q0Xl9n.png") # Optional UI image
     return e
 
-class UltimateHub(discord.ui.View):
-    def __init__(self): super().__init__(timeout=None)
+class MainHubView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        # Dropdowns for the 400 Games
+        self.add_item(ThemeMenu(THEMES[:10]))
+        self.add_item(ThemeMenu(THEMES[10:]))
 
-    @discord.ui.button(label="Daily", style=discord.ButtonStyle.success, emoji="📅", row=0)
+    @discord.ui.button(label="Daily", style=discord.ButtonStyle.success, emoji="📅", row=2)
     async def daily(self, i, b):
+        u = get_u(i.user.id, i.user.name)
+        now = datetime.now()
+        if u["last_daily"] and now < u["last_daily"] + timedelta(days=1):
+            rem = (u["last_daily"] + timedelta(days=1)) - now
+            return await i.response.send_message(f"⏳ Reward locked for {int(rem.total_seconds()//3600)}h.", ephemeral=True)
+        
+        reward = int(5000 * check_boost(u))
+        u["pts"] += reward
+        u["last_daily"] = now
+        await i.response.edit_message(embed=main_hub_embed(u), view=self)
+        await i.followup.send(f"✅ **Daily Claimed!** +{reward} pts", ephemeral=True)
+
+    @discord.ui.button(label="Role Shop", style=discord.ButtonStyle.primary, emoji="🎭", row=2)
+    async def role_btn(self, i, b):
+        await i.response.edit_message(content="🎭 **Badge Marketplace**", embed=None, view=SubMenuView("roles"))
+
+    @discord.ui.button(label="Boosters", style=discord.ButtonStyle.primary, emoji="🚀", row=2)
+    async def boost_btn(self, i, b):
+        await i.response.edit_message(content="🚀 **Multiplier Lab**", embed=None, view=SubMenuView("boosts"))
+
+    @discord.ui.button(label="King", style=discord.ButtonStyle.secondary, emoji="👑", row=3)
+    async def claim_king(self, i, b):
         u = get_u(i.user.id)
-        u["points"] += (5000 * check_boost(u))
-        await i.response.send_message(f"💰 Daily Claimed! (Boost applied)", ephemeral=True)
+        if u["pts"] < 10000: return await i.response.send_message("❌ Costs 10,000 pts.", ephemeral=True)
+        u["pts"] -= 10000
+        KOTH["id"], KOTH["name"] = i.user.id, i.user.name
+        await i.response.send_message(f"👑 **{i.user.name}** is the new King! (1% Tax on all winners)")
 
-    @discord.ui.button(label="Roles", style=discord.ButtonStyle.primary, emoji="🎭", row=0)
-    async def roles(self, i, b): await i.response.edit_message(content="🎭 **Role Shop**", embed=None, view=SubMenuView("roles"))
+class ThemeMenu(discord.ui.Select):
+    def __init__(self, theme_list):
+        opts = [discord.SelectOption(label=t) for t in theme_list]
+        super().__init__(placeholder="Step 1: Choose Sector...", options=opts)
 
-    @discord.ui.button(label="Boosts", style=discord.ButtonStyle.primary, emoji="🚀", row=0)
-    async def boosts(self, i, b): await i.response.edit_message(content="🚀 **Boost Shop**", embed=None, view=SubMenuView("boosts"))
+    async def callback(self, i: discord.Interaction):
+        theme = self.values[0]
+        view = discord.ui.View()
+        view.add_item(MechMenu(theme))
+        await i.response.edit_message(content=f"📍 **Location: {theme}**\nStep 2: Choose Game Mode", view=view)
 
-    @discord.ui.button(label="Roulette", style=discord.ButtonStyle.danger, emoji="🎡", row=1)
-    async def roul(self, i, b): await i.response.send_modal(RouletteModal())
+class MechMenu(discord.ui.Select):
+    def __init__(self, theme):
+        self.theme = theme
+        opts = [discord.SelectOption(label=m) for m in MECHANICS]
+        super().__init__(placeholder="Step 2: Choose Game...", options=opts)
 
-    @discord.ui.button(label="Crash", style=discord.ButtonStyle.danger, emoji="📈", row=1)
-    async def crash(self, i, b):
-        u = get_u(i.user.id); u["points"] -= 500
-        v = CrashView(i.user.id, 500); await i.response.send_message("📉 Loading Market...", view=v)
-        m = await i.original_response(); await v.run(m)
+    async def callback(self, i: discord.Interaction):
+        mech = self.values[0]
+        # Direct launch for Crash (special animation)
+        if mech == "Crash":
+            modal = CrashEntryModal(self.theme)
+            await i.response.send_modal(modal)
+        else:
+            modal = GlobalBetModal(self.theme, mech)
+            await i.response.send_modal(modal)
 
-    @discord.ui.button(label="Claim King (5k)", style=discord.ButtonStyle.secondary, emoji="👑", row=2)
-    async def king(self, i, b):
-        u = get_u(i.user.id)
-        if u["points"] < 5000: return await i.response.send_message("❌ Need 5,000 pts.", ephemeral=True)
-        u["points"] -= 5000; KOTH_DATA["king_id"], KOTH_DATA["king_name"] = i.user.id, i.user.name
-        await i.response.send_message(f"👑 {i.user.name} is the new King!")
+class CrashEntryModal(discord.ui.Modal, title="📉 Crash Investment"):
+    amt = discord.ui.TextInput(label="Bet Amount")
+    def __init__(self, theme): super().__init__(); self.theme = theme
+    async def on_submit(self, i):
+        val = int(self.amt.value)
+        u = get_u(i.user.id); u["pts"] -= val
+        view = CrashGame(i.user.id, val)
+        await i.response.send_message(f"📉 **{self.theme} Market Opening...**", view=view)
+        msg = await i.original_response(); await view.main_loop(msg)
 
-# ==========================================
-# 🚀 CORE EXECUTION
-# ==========================================
+# ==============================================================================
+# 🚀 CORE EXECUTION ENGINE (Line 350)
+# ==============================================================================
 bot = commands.Bot(command_prefix="!", intents=discord.Intents.all(), help_command=None)
 
 @bot.event
-async def on_message(m):
-    if not m.author.bot:
-        u = get_u(m.author.id, m.author.name)
-        u["points"] += (1 * check_boost(u))
-    await bot.process_commands(m)
+async def on_ready():
+    print(f"✅ Steam Ultimate Engine v31 Active: {bot.user}")
 
-@bot.command()
-async def hub(ctx):
-    await ctx.send(embed=gen_hub_embed(get_u(ctx.author.id)), view=UltimateHub())
+@bot.event
+async def on_message(msg):
+    if msg.author.bot: return
+    
+    # Message Income Logic
+    u = get_u(msg.author.id, msg.author.name)
+    multiplier = check_boost(u)
+    u["pts"] += (1 * multiplier) # Passive income
+    
+    await bot.process_commands(msg)
 
+@bot.command(name="hub")
+async def hub_command(ctx):
+    """Opens the Global Hub Interface"""
+    u = get_u(ctx.author.id, ctx.author.name)
+    await ctx.send(embed=main_hub_embed(u), view=MainHubView())
+
+@bot.command(name="balance")
+async def bal_command(ctx):
+    u = get_u(ctx.author.id)
+    await ctx.send(f"🪙 **{ctx.author.name}**, your balance is **{u['pts']} pts**.")
+
+@bot.command(name="give")
+@commands.has_permissions(administrator=True)
+async def give_points(ctx, member: discord.Member, amount: int):
+    u = get_u(member.id)
+    u["pts"] += amount
+    await ctx.send(f"✅ Admin added {amount} pts to {member.mention}.")
+
+# ERROR HANDLER (Line 400)
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.CommandNotFound):
+        return
+    print(f"🛑 SYSTEM ERROR: {error}")
+
+# ==============================================================================
+# 🏁 EOF - END OF FILE (Line 410)
+# ==============================================================================
 bot.run(TOKEN)
