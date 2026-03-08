@@ -5,12 +5,12 @@ import datetime
 import json
 import os
 
-# --- 1. CORE ENGINE ---
+# --- 1. ENGINE SETUP ---
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-DB_FILE = "ultimate_data.json"
+DB_FILE = "sovereign_pro.json"
 
 def load_db():
     if os.path.exists(DB_FILE):
@@ -27,90 +27,123 @@ db = load_db()
 def get_user(uid):
     uid = str(uid)
     if uid not in db:
-        db[uid] = {
-            "points": 2000, "bank": 0, "multi": 1.0, "shields": 0,
-            "hp": 100, "level": 1, "inventory": [], "pets": [],
-            "last_daily": None, "last_work": None, "streak": 0
-        }
+        db[uid] = {"points": 2000, "bank": 0, "multi": 1.0, "last_daily": None}
     return db[uid]
 
-# --- 2. DYNAMIC VIEW SYSTEM ---
+# --- 2. THE BETTING POPUP (MODAL) ---
 
-class GameCenterView(discord.ui.View):
+class BetModal(discord.ui.Modal, title="💰 Place Your Bet"):
+    bet_input = discord.ui.TextInput(
+        label="Amount to Bet",
+        placeholder="Enter a number...",
+        min_length=1,
+        max_length=10
+    )
+
+    def __init__(self, view):
+        super().__init__()
+        self.view = view
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            val = int(self.bet_input.value)
+            data = get_user(interaction.user.id)
+            
+            if val <= 0:
+                return await interaction.response.send_message("❌ Bet must be positive!", ephemeral=True)
+            if val > data["points"]:
+                return await interaction.response.send_message(f"❌ You only have {data['points']:,} points!", ephemeral=True)
+            
+            self.view.current_bet = val
+            await self.view.update_message(interaction, f"✅ Bet set to **{val:,}**!")
+        except ValueError:
+            await interaction.response.send_message("❌ Please enter a valid number.", ephemeral=True)
+
+# --- 3. THE DYNAMIC HUB VIEW ---
+
+class SovereignHub(discord.ui.View):
     def __init__(self, user):
-        super().__init__(timeout=120)
+        super().__init__(timeout=300)
         self.user = user
-        self.category = "Luck"  # Default category
+        self.category = "Luck"
+        self.current_bet = 100 # Default bet
 
-    async def update_message(self, interaction: discord.Interaction, log_msg: str):
-        """Ensures only ONE message is ever used by editing the existing one."""
+    async def update_message(self, interaction: discord.Interaction, log: str):
         data = get_user(self.user.id)
-        embed = discord.Embed(title="🎮 Sovereign Game Center", color=0x7289da)
-        embed.add_field(name="💰 Cash", value=f"{data['points']:,}", inline=True)
+        embed = discord.Embed(title="🎮 Sovereign Hub", color=0x2f3136)
+        embed.add_field(name="💰 Wallet", value=f"{data['points']:,}", inline=True)
         embed.add_field(name="🏦 Bank", value=f"{data['bank']:,}", inline=True)
-        embed.add_field(name="🚀 Multi", value=f"x{round(data['multi'], 2)}", inline=True)
-        embed.description = f"**Current Category:** {self.category}\n\n**Last Action:**\n> {log_msg}"
+        embed.add_field(name="🎲 Current Bet", value=f"**{self.current_bet:,}**", inline=True)
+        embed.description = f"**Category:** {self.category}\n\n**System Log:**\n> {log}"
         
-        # We refresh the view to ensure buttons match the category
+        # Set footer to show help
+        embed.set_footer(text="Banked points are safe from robbery!")
         await interaction.response.edit_message(embed=embed, view=self)
 
     @discord.ui.select(
-        placeholder="Choose a Category...",
+        placeholder="Choose a Game Category...",
         options=[
-            discord.SelectOption(label="Luck Games", emoji="🎲", value="Luck"),
-            discord.SelectOption(label="RPG Actions", emoji="⚔️", value="RPG"),
-            discord.SelectOption(label="Assets & Daily", emoji="🎁", value="Assets")
+            discord.SelectOption(label="Luck (Casino)", emoji="🎰", value="Luck"),
+            discord.SelectOption(label="RPG (Grind)", emoji="⛏️", value="RPG"),
+            discord.SelectOption(label="Daily & Bank", emoji="🏦", value="Assets")
         ]
     )
-    async def select_category(self, interaction: discord.Interaction, select: discord.ui.Select):
+    async def select_cat(self, interaction: discord.Interaction, select: discord.ui.Select):
         if interaction.user.id != self.user.id: return
         self.category = select.values[0]
-        # Update buttons visibility based on choice
-        for child in self.children:
-            if isinstance(child, discord.ui.Button):
-                child.disabled = False # Example: could hide/show here
-        await self.update_message(interaction, f"Switched to {self.category} mode.")
+        await self.update_message(interaction, f"Switched to {self.category}.")
 
-    # --- BUTTONS ---
+    @discord.ui.button(label="💰 Change Bet", style=discord.ButtonStyle.gray)
+    async def set_bet_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user.id: return
+        await interaction.response.send_modal(BetModal(self))
 
-    @discord.ui.button(label="🎰 Play / Action", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="🚀 PLAY", style=discord.ButtonStyle.primary)
     async def play_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user.id: return
         data = get_user(self.user.id)
-        log = ""
+        
+        # Double check they still have the money
+        if data["points"] < self.current_bet:
+            return await interaction.response.send_message("❌ You no longer have enough points for this bet!", ephemeral=True)
 
+        log = ""
         if self.category == "Luck":
-            # Coin Flip Logic
-            win = random.choice([True, False])
-            amt = 500
+            win = random.random() > 0.55 # 45% win rate
             if win:
-                data["points"] += amt
-                log = f"🪙 Coinflip: **WON {amt}**!"
+                reward = self.current_bet * 2
+                data["points"] += reward
+                log = f"🎰 **JACKPOT!** You won **{reward:,}**!"
             else:
-                data["points"] -= (amt // 2)
-                log = f"🪙 Coinflip: **LOST {amt//2}**."
+                data["points"] -= self.current_bet
+                log = f"💀 **LOSE!** You lost your bet of **{self.current_bet:,}**."
 
         elif self.category == "RPG":
-            # Mining Logic
-            reward = int(random.randint(100, 400) * data["multi"])
-            data["points"] += reward
-            log = f"⛏️ Mining: Found ores worth **{reward}**!"
+            # Mining uses bet as "Gear Quality"
+            success = random.random() > 0.2
+            if success:
+                gain = int(self.current_bet * random.uniform(1.2, 2.0))
+                data["points"] += gain
+                log = f"⛏️ **MINED!** Your gear found **{gain:,}** worth of gold!"
+            else:
+                data["points"] -= self.current_bet
+                log = f"🛠️ **BROKEN!** Your tools broke. Lost **{self.current_bet:,}**."
 
         elif self.category == "Assets":
-            # Daily Check
+            # Daily doesn't use bets
             now = datetime.datetime.now()
             if data["last_daily"]:
                 last = datetime.datetime.fromisoformat(data["last_daily"])
                 if (now - last).total_seconds() < 86400:
-                    log = "⌛ Daily: Already claimed today!"
+                    log = "⌛ **WAIT!** Daily is on cooldown."
                 else:
-                    data["points"] += 1000
+                    data["points"] += 2000
                     data["last_daily"] = now.isoformat()
-                    log = "🎁 Daily: **+1,000 pts**!"
+                    log = "🎁 **DAILY!** +2,000 pts!"
             else:
-                data["points"] += 1000
+                data["points"] += 2000
                 data["last_daily"] = now.isoformat()
-                log = "🎁 Daily: **+1,000 pts**!"
+                log = "🎁 **DAILY!** +2,000 pts!"
 
         save_db(db)
         await self.update_message(interaction, log)
@@ -119,27 +152,23 @@ class GameCenterView(discord.ui.View):
     async def bank_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user.id: return
         data = get_user(self.user.id)
-        total = data["points"]
-        data["bank"] += total
+        amt = data["points"]
+        data["bank"] += amt
         data["points"] = 0
         save_db(db)
-        await self.update_message(interaction, f"🏦 Deposited **{total:,}** to bank.")
+        await self.update_message(interaction, f"🏦 Secured **{amt:,}** in the vault.")
 
-# --- 3. COMMANDS ---
+# --- 4. RUN ---
 
 @bot.command()
 async def hub(ctx):
-    data = get_user(ctx.author.id)
-    embed = discord.Embed(title="🎮 Sovereign Game Center", color=0x7289da)
-    embed.add_field(name="💰 Cash", value=f"{data['points']:,}", inline=True)
-    embed.add_field(name="🏦 Bank", value=f"{data['bank']:,}", inline=True)
-    embed.description = "Select a category from the dropdown to change games!"
-    
-    await ctx.send(embed=embed, view=GameCenterView(ctx.author))
+    await ctx.send("🌍 Loading Sovereign Hub...", delete_after=1)
+    embed = discord.Embed(title="🎮 Sovereign Hub", color=0x2f3136)
+    view = SovereignHub(ctx.author)
+    await ctx.send(embed=embed, view=view)
 
 @bot.event
 async def on_ready():
-    print(f"🔥 Sovereign Engine Active: {bot.user}")
+    print(f"🔥 Online: {bot.user}")
 
-# --- TOKEN ---
 bot.run('MTQ3NjYwNTAxMDUwMTQzOTU0OA.GKeB4T.7DZq4z7p56d3CxnJRzM4AQ8fMWmtp8LCkdM2yg')
