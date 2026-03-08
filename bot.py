@@ -1,17 +1,16 @@
 import discord
-from discord.ext import commands, tasks
+from discord.ext import commands
 import random
-import asyncio
 import datetime
 import json
 import os
 
-# --- 1. CORE ENGINE & PERSISTENCE ---
+# --- 1. CORE ENGINE ---
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-DB_FILE = "sovereign_data.json"
+DB_FILE = "ultimate_data.json"
 
 def load_db():
     if os.path.exists(DB_FILE):
@@ -29,163 +28,118 @@ def get_user(uid):
     uid = str(uid)
     if uid not in db:
         db[uid] = {
-            "points": 2000, "bank": 0, "multi": 1.0, "rebirths": 0, 
-            "shields": 0, "hp": 100, "level": 1, "inventory": [], 
-            "pets": [], "last_daily": None, "last_work": None, 
-            "last_rob": None, "streak": 0
+            "points": 2000, "bank": 0, "multi": 1.0, "shields": 0,
+            "hp": 100, "level": 1, "inventory": [], "pets": [],
+            "last_daily": None, "last_work": None, "streak": 0
         }
     return db[uid]
 
-# --- 2. THE 20-GAME HUB INTERFACE ---
+# --- 2. DYNAMIC VIEW SYSTEM ---
 
-class SovereignHub(discord.ui.View):
+class GameCenterView(discord.ui.View):
     def __init__(self, user):
         super().__init__(timeout=120)
         self.user = user
+        self.category = "Luck"  # Default category
 
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.user.id:
-            await interaction.response.send_message("❌ This is not your menu!", ephemeral=True)
-            return False
-        return True
-
-    # --- ROW 0: ECONOMY & COOLDOWNS ---
-    
-    @discord.ui.button(label="🎁 Daily Reward", style=discord.ButtonStyle.success, row=0)
-    async def daily(self, interaction, button):
+    async def update_message(self, interaction: discord.Interaction, log_msg: str):
+        """Ensures only ONE message is ever used by editing the existing one."""
         data = get_user(self.user.id)
-        now = datetime.datetime.now()
+        embed = discord.Embed(title="🎮 Sovereign Game Center", color=0x7289da)
+        embed.add_field(name="💰 Cash", value=f"{data['points']:,}", inline=True)
+        embed.add_field(name="🏦 Bank", value=f"{data['bank']:,}", inline=True)
+        embed.add_field(name="🚀 Multi", value=f"x{round(data['multi'], 2)}", inline=True)
+        embed.description = f"**Current Category:** {self.category}\n\n**Last Action:**\n> {log_msg}"
         
-        # FIXED: Time-check logic
-        if data["last_daily"]:
-            last_time = datetime.datetime.fromisoformat(data["last_daily"])
-            delta = now - last_time
-            if delta.total_seconds() < 86400:
-                seconds_left = 86400 - delta.total_seconds()
-                hours = int(seconds_left // 3600)
-                minutes = int((seconds_left % 3600) // 60)
-                return await interaction.response.send_message(f"⌛ Chill! You can claim again in **{hours}h {minutes}m**.", ephemeral=True)
+        # We refresh the view to ensure buttons match the category
+        await interaction.response.edit_message(embed=embed, view=self)
 
-        reward = 1000 + (data["streak"] * 100)
-        data["points"] += reward
-        data["streak"] += 1
-        data["last_daily"] = now.isoformat()
-        save_db(db)
-        await interaction.response.send_message(f"🎁 **Daily Claimed!** +{reward:,} pts. Streak: {data['streak']} days!", ephemeral=True)
+    @discord.ui.select(
+        placeholder="Choose a Category...",
+        options=[
+            discord.SelectOption(label="Luck Games", emoji="🎲", value="Luck"),
+            discord.SelectOption(label="RPG Actions", emoji="⚔️", value="RPG"),
+            discord.SelectOption(label="Assets & Daily", emoji="🎁", value="Assets")
+        ]
+    )
+    async def select_category(self, interaction: discord.Interaction, select: discord.ui.Select):
+        if interaction.user.id != self.user.id: return
+        self.category = select.values[0]
+        # Update buttons visibility based on choice
+        for child in self.children:
+            if isinstance(child, discord.ui.Button):
+                child.disabled = False # Example: could hide/show here
+        await self.update_message(interaction, f"Switched to {self.category} mode.")
 
-    @discord.ui.button(label="💼 Work", style=discord.ButtonStyle.success, row=0)
-    async def work(self, interaction, button):
+    # --- BUTTONS ---
+
+    @discord.ui.button(label="🎰 Play / Action", style=discord.ButtonStyle.primary)
+    async def play_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user.id: return
         data = get_user(self.user.id)
-        now = datetime.datetime.now()
-        
-        if data["last_work"]:
-            last_time = datetime.datetime.fromisoformat(data["last_work"])
-            if (now - last_time).total_seconds() < 3600:
-                return await interaction.response.send_message("⌛ You're exhausted. Rest for an hour!", ephemeral=True)
+        log = ""
 
-        pay = random.randint(400, 900)
-        data["points"] += pay
-        data["last_work"] = now.isoformat()
+        if self.category == "Luck":
+            # Coin Flip Logic
+            win = random.choice([True, False])
+            amt = 500
+            if win:
+                data["points"] += amt
+                log = f"🪙 Coinflip: **WON {amt}**!"
+            else:
+                data["points"] -= (amt // 2)
+                log = f"🪙 Coinflip: **LOST {amt//2}**."
+
+        elif self.category == "RPG":
+            # Mining Logic
+            reward = int(random.randint(100, 400) * data["multi"])
+            data["points"] += reward
+            log = f"⛏️ Mining: Found ores worth **{reward}**!"
+
+        elif self.category == "Assets":
+            # Daily Check
+            now = datetime.datetime.now()
+            if data["last_daily"]:
+                last = datetime.datetime.fromisoformat(data["last_daily"])
+                if (now - last).total_seconds() < 86400:
+                    log = "⌛ Daily: Already claimed today!"
+                else:
+                    data["points"] += 1000
+                    data["last_daily"] = now.isoformat()
+                    log = "🎁 Daily: **+1,000 pts**!"
+            else:
+                data["points"] += 1000
+                data["last_daily"] = now.isoformat()
+                log = "🎁 Daily: **+1,000 pts**!"
+
         save_db(db)
-        await interaction.response.send_message(f"💼 You worked a shift and earned **{pay:,}** points!", ephemeral=True)
+        await self.update_message(interaction, log)
 
-    @discord.ui.button(label="🏦 Deposit All", style=discord.ButtonStyle.secondary, row=0)
-    async def deposit(self, interaction, button):
+    @discord.ui.button(label="🏦 Bank All", style=discord.ButtonStyle.success)
+    async def bank_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user.id: return
         data = get_user(self.user.id)
-        if data["points"] <= 0: return await interaction.response.send_message("No cash to deposit!", ephemeral=True)
-        data["bank"] += data["points"]
+        total = data["points"]
+        data["bank"] += total
         data["points"] = 0
         save_db(db)
-        await interaction.response.send_message("🏦 All points secured in the bank! (Safe from robbers)", ephemeral=True)
-
-    # --- ROW 1: RPG & ACTION ---
-
-    @discord.ui.button(label="⛏️ Mine", style=discord.ButtonStyle.primary, row=1)
-    async def mine(self, interaction, button):
-        data = get_user(self.user.id)
-        ores = {"Stone": 20, "Iron": 100, "Gold": 400, "Diamond": 2000}
-        found = random.choices(list(ores.keys()), weights=[65, 20, 10, 5])[0]
-        data["points"] += ores[found]
-        save_db(db)
-        await interaction.response.send_message(f"⛏️ You found **{found}**! +{ores[found]} pts", ephemeral=True)
-
-    @discord.ui.button(label="🎣 Fish", style=discord.ButtonStyle.primary, row=1)
-    async def fish(self, interaction, button):
-        data = get_user(self.user.id)
-        res = random.choice(["🐟", "🐡", "🦈", "👞"])
-        val = 1500 if res == "🦈" else 100
-        data["points"] += val
-        await interaction.response.send_message(f"🎣 You caught a {res}! Value: {val}", ephemeral=True)
-
-    @discord.ui.button(label="⚔️ Dungeon", style=discord.ButtonStyle.danger, row=1)
-    async def dungeon(self, interaction, button):
-        data = get_user(self.user.id)
-        if random.random() > 0.5:
-            win = 2500
-            data["points"] += win
-            await interaction.response.send_message(f"⚔️ Dungeon Cleared! +{win}", ephemeral=True)
-        else:
-            data["hp"] -= 30
-            await interaction.response.send_message("💀 The boss beat you! -30 HP.", ephemeral=True)
-
-    # --- ROW 2 & 3: CASINO & MISC (Simplified for logic length) ---
-
-    @discord.ui.button(label="🎰 Slots", style=discord.ButtonStyle.gray, row=2)
-    async def slots(self, interaction, button):
-        data = get_user(self.user.id)
-        if data["points"] < 200: return await interaction.response.send_message("Need 200 pts!", ephemeral=True)
-        data["points"] -= 200
-        items = ["🍎", "🍒", "💎"]
-        res = [random.choice(items) for _ in range(3)]
-        if res[0] == res[1] == res[2]:
-            data["points"] += 5000
-            await interaction.response.send_message(f"{' '.join(res)} - **JACKPOT! +5000**", ephemeral=True)
-        else:
-            await interaction.response.send_message(f"{' '.join(res)} - No luck.", ephemeral=True)
-
-    @discord.ui.button(label="🐾 Hatch Pet (5k)", style=discord.ButtonStyle.gray, row=2)
-    async def pet(self, interaction, button):
-        data = get_user(self.user.id)
-        if data["points"] < 5000: return await interaction.response.send_message("Need 5,000 pts!", ephemeral=True)
-        data["points"] -= 5000
-        pet = random.choice(["🐶 Dog", "🐱 Cat", "🐉 Dragon"])
-        data["pets"].append(pet)
-        data["multi"] += 0.2
-        save_db(db)
-        await interaction.response.send_message(f"🥚 Hatching... You got a **{pet}**! Multiplier increased!", ephemeral=True)
+        await self.update_message(interaction, f"🏦 Deposited **{total:,}** to bank.")
 
 # --- 3. COMMANDS ---
 
 @bot.command()
 async def hub(ctx):
     data = get_user(ctx.author.id)
-    embed = discord.Embed(title="🏰 Empire Sovereign Game Center", color=0x7289da)
+    embed = discord.Embed(title="🎮 Sovereign Game Center", color=0x7289da)
     embed.add_field(name="💰 Cash", value=f"{data['points']:,}", inline=True)
     embed.add_field(name="🏦 Bank", value=f"{data['bank']:,}", inline=True)
-    embed.add_field(name="🚀 Multi", value=f"x{round(data['multi'], 2)}", inline=True)
-    embed.description = "All games are accessible via buttons. **Daily** is now fixed (24h cooldown)!"
-    await ctx.send(embed=embed, view=SovereignHub(ctx.author))
-
-@bot.command()
-async def rob(ctx, member: discord.Member):
-    if member.id == ctx.author.id: return
-    atk = get_user(ctx.author.id)
-    vic = get_user(member.id)
+    embed.description = "Select a category from the dropdown to change games!"
     
-    if vic["points"] < 500: return await ctx.send("They are too poor to rob!")
-    
-    if random.random() < 0.3:
-        stolen = int(vic["points"] * 0.2)
-        vic["points"] -= stolen
-        atk["points"] += stolen
-        await ctx.send(f"🥷 **Success!** Stole {stolen:,} points from {member.name}!")
-    else:
-        await ctx.send("🚓 **Busted!** You fled before the police arrived.")
-    save_db(db)
+    await ctx.send(embed=embed, view=GameCenterView(ctx.author))
 
 @bot.event
 async def on_ready():
     print(f"🔥 Sovereign Engine Active: {bot.user}")
 
-# --- RUN ---
-bot.run('MTQ3NjYwNTAxMDUwMTQzOTU0OA.GKeB4T.7DZq4z7p56d3CxnJRzM4AQ8fMWmtp8LCkdM2yg')
+# --- TOKEN ---
+bot.run('PASTE_YOUR_NEW_TOKEN_HERE')
