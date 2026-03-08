@@ -7,12 +7,13 @@ import asyncio
 from datetime import datetime, timedelta
 
 # ==========================================
-# CONFIGURATION
+# ⚙️ CONFIGURATION & TOKEN
 # ==========================================
 TOKEN = 'MTQ3NjYwNTAxMDUwMTQzOTU0OA.GKeB4T.7DZq4z7p56d3CxnJRzM4AQ8fMWmtp8LCkdM2yg'
-DATA_FILE = "steam_data.json"
+DATA_FILE = "manifest_database.json"
+MANIFEST_FEE = 40
 
-class SteamBot(commands.Bot):
+class UltimateEngine(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
         intents.message_content = True 
@@ -20,18 +21,19 @@ class SteamBot(commands.Bot):
         super().__init__(command_prefix="!", intents=intents, help_command=None)
 
     async def on_ready(self):
-        print(f'🚀 STEAM ENGINE ONLINE: {self.user}')
-        print('>> Type !steam to open the Dashboard.')
+        print(f'🚀 STEAM ENGINE + MANIFEST ONLINE: {self.user}')
+        print(f'📡 Ready for !hub or !manifest (Cost: {MANIFEST_FEE})')
 
-bot = SteamBot()
+bot = UltimateEngine()
 
 # ==========================================
-# DATA SYSTEM (The Manifest)
+# 💾 DATABASE SYSTEM
 # ==========================================
 def load_db():
     if not os.path.exists(DATA_FILE): return {}
     with open(DATA_FILE, "r") as f:
-        return json.load(f)
+        try: return json.load(f)
+        except: return {}
 
 def save_db(data):
     with open(DATA_FILE, "w") as f:
@@ -42,9 +44,9 @@ def get_user(uid):
     uid = str(uid)
     if uid not in db:
         db[uid] = {
-            "points": 2500,
-            "inventory": ["Welcome Badge"],
-            "stats": {"wins": 0, "losses": 0, "total_bet": 0},
+            "points": 1000, 
+            "inventory": ["Standard User License"], 
+            "stats": {"games_played": 0, "total_won": 0},
             "last_daily": None
         }
         save_db(db)
@@ -56,154 +58,142 @@ def update_user(uid, data):
     save_db(db)
 
 # ==========================================
-# ADVANCED GUI - BLACKJACK
+# 💸 BETTING MODAL (The Pay-to-Play System)
 # ==========================================
-class BlackjackGUI(discord.ui.View):
-    def __init__(self, ctx, bet):
+class BetModal(discord.ui.Modal, title='Place Your Bet'):
+    bet_input = discord.ui.TextInput(label='Enter Bet Amount', placeholder='e.g. 250', required=True)
+
+    def __init__(self, game):
+        super().__init__()
+        self.game = game
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try: 
+            bet = int(self.bet_input.value)
+        except: 
+            return await interaction.response.send_message("❌ Please enter a whole number.", ephemeral=True)
+
+        u = get_user(interaction.user.id)
+        if bet <= 0 or u["points"] < bet:
+            return await interaction.response.send_message(f"❌ You only have **{u['points']}** points.", ephemeral=True)
+
+        u["points"] -= bet
+        u["stats"]["games_played"] += 1
+        update_user(interaction.user.id, u)
+
+        if self.game == "blackjack":
+            v = BlackjackView(interaction.user.id, bet)
+            await interaction.response.send_message(embed=v.get_embed(), view=v)
+        
+        elif self.game == "slots":
+            icons = ["🍒", "💎", "🍋", "🔔", "⭐"]
+            res = [random.choice(icons) for _ in range(3)]
+            win = bet * 15 if res[0]==res[1]==res[2] == "💎" else (bet * 5 if res[0]==res[1]==res[2] else 0)
+            u = get_user(interaction.user.id); u["points"] += win; update_user(interaction.user.id, u)
+            await interaction.response.send_message(f"🎰 | {' | '.join(res)} | 🎰\n" + (f"✨ **WINNER! +{win} pts**" if win > 0 else "💀 Lost bet."))
+
+# ==========================================
+# 🃏 MINIGAMES (Blackjack & Logic)
+# ==========================================
+class BlackjackView(discord.ui.View):
+    def __init__(self, user_id, bet):
         super().__init__(timeout=60)
-        self.ctx = ctx
-        self.bet = bet
+        self.uid, self.bet = str(user_id), bet
         self.deck = [v for v in ['2','3','4','5','6','7','8','9','10','J','Q','K','A'] for _ in range(4)]
         random.shuffle(self.deck)
-        self.player = [self.deck.pop(), self.deck.pop()]
-        self.dealer = [self.deck.pop(), self.deck.pop()]
+        self.p_hand, self.d_hand = [self.deck.pop(), self.deck.pop()], [self.deck.pop(), self.deck.pop()]
 
-    def get_score(self, hand):
-        val, aces = 0, 0
-        for card in hand:
-            if card in ['J','Q','K']: val += 10
-            elif card == 'A': val += 11; aces += 1
-            else: val += int(card)
-        while val > 21 and aces: val -= 10; aces -= 1
-        return val
+    def calc(self, hand):
+        v, a = 0, 0
+        for c in hand:
+            if c in ['J','Q','K']: v += 10
+            elif c == 'A': v += 11; a += 1
+            else: v += int(c)
+        while v > 21 and a: v -= 10; a -= 1
+        return v
 
-    def create_embed(self, closed=True):
-        embed = discord.Embed(title="🃏 Steam Blackjack", color=0x1b2838)
-        embed.add_field(name="Your Hand", value=f"{' '.join(self.player)}\nScore: {self.get_score(self.player)}", inline=True)
-        dealer_display = f"{self.dealer[0]} ❓" if closed else f"{' '.join(self.dealer)}\nScore: {self.get_score(self.dealer)}"
-        embed.add_field(name="Dealer", value=dealer_display, inline=True)
-        return embed
+    def get_embed(self, done=False):
+        pv, dv = self.calc(self.p_hand), self.calc(self.d_hand)
+        e = discord.Embed(title="🃏 Blackjack", color=0x2ecc71)
+        e.add_field(name=f"You ({pv})", value=" ".join(self.p_hand))
+        if done: e.add_field(name=f"Dealer ({dv})", value=" ".join(self.d_hand))
+        else: e.add_field(name="Dealer (?)", value=f"{self.d_hand[0]} ❓")
+        return e
 
     @discord.ui.button(label="Hit", style=discord.ButtonStyle.blurple)
-    async def hit(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user != self.ctx.author: return
-        self.player.append(self.deck.pop())
-        if self.get_score(self.player) > 21:
-            await self.finish(interaction, "BUST! Dealer Wins.", False)
-        else:
-            await interaction.response.edit_message(embed=self.create_embed())
+    async def hit(self, interaction: discord.Interaction, btn: discord.ui.Button):
+        if str(interaction.user.id) != self.uid: return
+        self.p_hand.append(self.deck.pop())
+        if self.calc(self.p_hand) > 21: await self.end(interaction, "BUST!", False)
+        else: await interaction.response.edit_message(embed=self.get_embed())
 
     @discord.ui.button(label="Stand", style=discord.ButtonStyle.gray)
-    async def stand(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user != self.ctx.author: return
-        while self.get_score(self.dealer) < 17:
-            self.dealer.append(self.deck.pop())
-        
-        p_score = self.get_score(self.player)
-        d_score = self.get_score(self.dealer)
-        
-        if d_score > 21 or p_score > d_score:
-            await self.finish(interaction, "YOU WIN!", True)
-        elif p_score < d_score:
-            await self.finish(interaction, "Dealer Wins.", False)
-        else:
-            await self.finish(interaction, "PUSH (Tie).", None)
+    async def stand(self, interaction: discord.Interaction, btn: discord.ui.Button):
+        if str(interaction.user.id) != self.uid: return
+        while self.calc(self.d_hand) < 17: self.d_hand.append(self.deck.pop())
+        pv, dv = self.calc(self.p_hand), self.calc(self.d_hand)
+        res = "WIN!" if dv > 21 or pv > dv else ("LOSE." if pv < dv else "PUSH.")
+        await self.end(interaction, res, "WIN" in res or "PUSH" in res)
 
-    async def finish(self, interaction, result, won):
-        user_data = get_user(self.ctx.author.id)
-        if won is True: user_data["points"] += self.bet * 2
-        elif won is None: user_data["points"] += self.bet
-        update_user(self.ctx.author.id, user_data)
-        self.stop()
-        await interaction.response.edit_message(content=f"**{result}**", embed=self.create_embed(False), view=None)
+    async def end(self, interaction, res, payout):
+        u = get_user(self.uid)
+        if "WIN" in res: u["points"] += self.bet * 2
+        elif "PUSH" in res: u["points"] += self.bet
+        update_user(self.uid, u)
+        await interaction.response.edit_message(content=f"**{res}**", embed=self.get_embed(True), view=None)
 
 # ==========================================
-# MAIN DASHBOARD (The Steam Hub)
+# 🖥️ HUB & MANIFEST INTERFACE
 # ==========================================
-class SteamDashboard(discord.ui.View):
-    def __init__(self, ctx):
-        super().__init__(timeout=120)
-        self.ctx = ctx
+class HubView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
 
-    @discord.ui.button(label="My Profile", style=discord.ButtonStyle.gray, emoji="👤")
-    async def profile(self, interaction: discord.Interaction, button: discord.ui.Button):
-        user = get_user(interaction.user.id)
-        embed = discord.Embed(title=f"Steam Profile: {interaction.user.display_name}", color=0x66c0f4)
-        embed.set_thumbnail(url=interaction.user.display_avatar.url)
-        embed.add_field(name="Wallet Balance", value=f"🪙 {user['points']:,} pts", inline=False)
-        embed.add_field(name="Manifest (Inventory)", value=", ".join(user['inventory']) or "Empty", inline=False)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    @discord.ui.button(label="Play Blackjack", style=discord.ButtonStyle.green, emoji="🃏")
-    async def play_bj(self, interaction: discord.Interaction, button: discord.ui.Button):
-        user = get_user(interaction.user.id)
-        if user["points"] < 100:
-            return await interaction.response.send_message("❌ Insufficient funds (Min 100).", ephemeral=True)
-        user["points"] -= 100
-        update_user(interaction.user.id, user)
-        view = BlackjackGUI(self.ctx, 100)
-        await interaction.response.send_message(embed=view.create_embed(), view=view)
-
-    @discord.ui.button(label="Spin Slots", style=discord.ButtonStyle.blurple, emoji="🎰")
-    async def play_slots(self, interaction: discord.Interaction, button: discord.ui.Button):
-        user = get_user(interaction.user.id)
-        if user["points"] < 50:
-            return await interaction.response.send_message("❌ Insufficient funds (Min 50).", ephemeral=True)
+    @discord.ui.button(label="Steam Manifest (40 pts)", style=discord.ButtonStyle.primary, emoji="📄", row=0)
+    async def manifest_btn(self, interaction: discord.Interaction, btn: discord.ui.Button):
+        u = get_user(interaction.user.id)
+        if u["points"] < MANIFEST_FEE:
+            return await interaction.response.send_message(f"❌ Manifest access costs **{MANIFEST_FEE} pts**.", ephemeral=True)
         
-        user["points"] -= 50
-        icons = ["💎", "🍒", "🍋", "🔔", "⭐"]
-        res = [random.choice(icons) for _ in range(3)]
-        
-        win = 0
-        if res[0] == res[1] == res[2]: win = 1000 if res[0] == "💎" else 500
-        elif res[0] == res[1] or res[1] == res[2]: win = 100
-        
-        user["points"] += win
-        update_user(interaction.user.id, user)
-        result_text = f"🎰 **{' | '.join(res)}** 🎰\n" + (f"✅ You won **{win}**!" if win > 0 else "❌ No luck.")
-        await interaction.response.send_message(result_text)
+        u["points"] -= MANIFEST_FEE
+        update_user(interaction.user.id, u)
 
-    @discord.ui.button(label="Claim Daily", style=discord.ButtonStyle.primary, emoji="🎁")
-    async def daily(self, interaction: discord.Interaction, button: discord.ui.Button):
-        user = get_user(interaction.user.id)
-        now = datetime.now()
-        if user["last_daily"] and now < datetime.fromisoformat(user["last_daily"]) + timedelta(days=1):
-            return await interaction.response.send_message("⏳ Already claimed! Come back later.", ephemeral=True)
-        
-        user["points"] += 500
-        user["last_daily"] = now.isoformat()
-        update_user(interaction.user.id, user)
-        await interaction.response.send_message("🎁 **+500 points** added to your Steam Wallet!")
+        e = discord.Embed(title="📟 Steam Digital Manifest", color=0x1b2838)
+        e.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
+        e.add_field(name="Points", value=f"🪙 {u['points']}")
+        e.add_field(name="Software Library", value="\n".join([f"• {i}" for i in u['inventory']]))
+        e.add_field(name="Usage Stats", value=f"Games Played: {u['stats']['games_played']}")
+        await interaction.response.send_message(embed=e)
 
-# ==========================================
-# COMMANDS
-# ==========================================
-@bot.command()
-async def steam(ctx):
-    """Opens the Steam Dashboard GUI"""
-    embed = discord.Embed(
-        title="🎮 Steam Gaming Manifest",
-        description="Welcome to the digital library. Manage your inventory and gamble your wallet points below.",
-        color=0x171a21
-    )
-    embed.set_image(url="https://i.imgur.com/vH9Yn2P.png") # Steam-like header
-    await ctx.send(embed=embed, view=SteamDashboard(ctx))
+    @discord.ui.button(label="Daily Points", style=discord.ButtonStyle.success, emoji="🎁", row=0)
+    async def daily(self, interaction: discord.Interaction, btn: discord.ui.Button):
+        u = get_user(interaction.user.id); u["points"] += 500; update_user(interaction.user.id, u)
+        await interaction.response.send_message("✅ +500 daily points added!", ephemeral=True)
+
+    @discord.ui.button(label="Play Blackjack", style=discord.ButtonStyle.danger, emoji="🃏", row=1)
+    async def bj(self, interaction: discord.Interaction, btn: discord.ui.Button):
+        await interaction.response.send_modal(BetModal("blackjack"))
+
+    @discord.ui.button(label="Play Slots", style=discord.ButtonStyle.danger, emoji="🎰", row=1)
+    async def slots(self, interaction: discord.Interaction, btn: discord.ui.Button):
+        await interaction.response.send_modal(BetModal("slots"))
 
 @bot.command()
-@commands.has_permissions(administrator=True)
-async def give_points(ctx, member: discord.Member, amount: int):
-    user = get_user(member.id)
-    user["points"] += amount
-    update_user(member.id, user)
-    await ctx.send(f"✅ Transferred **{amount:,}** points to {member.mention}'s Wallet.")
+async def hub(ctx):
+    """Entry point for the Dashboard"""
+    e = discord.Embed(title="🌐 The Ultimate Hub", description=f"Manifest generation: **{MANIFEST_FEE} pts**\nUse the buttons below to interact.", color=0x2c3e50)
+    await ctx.send(embed=e, view=HubView())
 
-@bot.event
-async def on_message(message):
-    if message.author.bot: return
-    # Passive chat earning
-    user = get_user(message.author.id)
-    user["points"] += 2 
-    update_user(message.author.id, user)
-    await bot.process_commands(message)
+@bot.command()
+async def manifest(ctx):
+    """Direct manifest command with 40pt fee"""
+    u = get_user(ctx.author.id)
+    if u["points"] < MANIFEST_FEE:
+        return await ctx.send(f"❌ You need {MANIFEST_FEE} points.")
+    
+    u["points"] -= MANIFEST_FEE
+    update_user(ctx.author.id, u)
+    e = discord.Embed(title="📟 Paid Steam Manifest", description=f"Points: **{u['points']}**\nSoftware: **{', '.join(u['inventory'])}**", color=0x1b2838)
+    await ctx.send(embed=e)
 
 bot.run(TOKEN)
