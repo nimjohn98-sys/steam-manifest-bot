@@ -6,148 +6,166 @@ import io
 from datetime import datetime
 
 # ==========================================
-# ⚙️ GLOBAL CONFIGURATION
+# ⚙️ GLOBAL CONFIG & JACKPOT
 # ==========================================
 TOKEN = 'MTQ3NjYwNTAxMDUwMTQzOTU0OA.GKeB4T.7DZq4z7p56d3CxnJRzM4AQ8fMWmtp8LCkdM2yg'
 
-# "Item Name": [Price, Required Prestige]
-SHOP_CONFIG = {
-    "VIP License": [5000, 0],
-    "Golden Profile": [10000, 0],
-    "Hacker Badge": [3000, 0],
-    "Diamond Rank": [25000, 1],
-    "Server Legend": [50000, 2]
-}
-
-MANIFEST_COST = 40
-PRESTIGE_COST = 50000
-
-# Memory Storage
 DB = {}
+JACKPOT = 1000  # Starting Jackpot
 
 def get_user(uid, name="Unknown"):
     uid = str(uid)
     if uid not in DB:
         DB[uid] = {"points": 1000, "inv": ["Standard License"], "name": name, "prestige": 0}
-    else:
-        DB[uid]["name"] = name
     return DB[uid]
 
 # ==========================================
-# 🎁 GIFTING MODAL
+# 🎰 BETTING MODAL GATEWAY
 # ==========================================
-class GiftModal(discord.ui.Modal, title='🎁 Gift Points'):
-    target_id = discord.ui.TextInput(label='Recipient User ID', placeholder='e.g. 123456789', min_length=15)
-    amount = discord.ui.TextInput(label='Amount to Gift', placeholder='500')
+class BetModal(discord.ui.Modal, title='💰 Place Your Bet'):
+    amount = discord.ui.TextInput(label='Bet Amount', placeholder='100')
+
+    def __init__(self, game):
+        super().__init__()
+        self.game = game
 
     async def on_submit(self, interaction: discord.Interaction):
-        try:
-            amt = int(self.amount.value)
-            target = str(self.target_id.value)
-        except:
-            return await interaction.response.send_message("❌ Invalid input. Use numbers.", ephemeral=True)
-
-        sender = get_user(interaction.user.id)
+        try: bet = int(self.amount.value)
+        except: return await interaction.response.send_message("❌ Invalid number.", ephemeral=True)
         
-        if target == str(interaction.user.id):
-            return await interaction.response.send_message("❌ You can't gift yourself!", ephemeral=True)
+        u = get_user(interaction.user.id, interaction.user.name)
+        if bet <= 0 or u["points"] < bet: return await interaction.response.send_message("❌ Inadequate funds.", ephemeral=True)
         
-        if amt <= 0 or sender["points"] < amt:
-            return await interaction.response.send_message(f"❌ Inadequate funds! You have {sender['points']} pts.", ephemeral=True)
+        u["points"] -= bet
+        global JACKPOT
 
-        if target not in DB:
-            return await interaction.response.send_message("❌ User not found in database. They must type `!hub` first!", ephemeral=True)
+        # --- ROUTING ---
+        if self.game == "coinflip":
+            win = random.random() > 0.5
+            side = "HEADS" if win else "TAILS"
+            if win: u["points"] += bet * 2
+            else: JACKPOT += int(bet * 0.1)
+            await interaction.response.send_message(f"🪙 It's **{side}**! " + (f"Won {bet*2}!" if win else "Lost bet."))
 
-        # Transfer
-        sender["points"] -= amt
-        DB[target]["points"] += amt
-        
-        await interaction.response.send_message(f"✅ Gifted **{amt}** points to **{DB[target]['name']}**!")
+        elif self.game == "crash":
+            view = CrashView(interaction.user.id, bet)
+            await interaction.response.send_message(embed=discord.Embed(title="📈 CRASH", description="Preparing..."), view=view)
+            msg = await interaction.original_response()
+            bot.loop.create_task(view.run(msg))
+
+        elif self.game == "slots":
+            icons = ["🍒", "🍋", "🔔", "💎"]
+            res = [random.choice(icons) for _ in range(3)]
+            win_amt = 0
+            if res[0] == res[1] == res[2]:
+                if res[0] == "💎": # JACKPOT WIN
+                    win_amt = bet * 10 + JACKPOT
+                    JACKPOT = 1000
+                    msg = f"🎊 **JACKPOT WINNER!** +{win_amt} pts!"
+                else: win_amt = bet * 10; msg = f"✅ TRIPLE! +{win_amt} pts"
+            elif res[0] == res[1] or res[1] == res[2]:
+                win_amt = int(bet * 1.5); msg = f"✅ Double! +{win_amt} pts"
+            else:
+                JACKPOT += int(bet * 0.1); msg = "❌ Lost."
+            u["points"] += win_amt
+            await interaction.response.send_message(f"🎰 | {' | '.join(res)} | 🎰\n{msg}")
+
+        elif self.game == "blackjack":
+            view = BlackjackView(interaction.user.id, bet)
+            await interaction.response.send_message(embed=view.get_embed(), view=view)
 
 # ==========================================
-# 🛒 SHOP & GAMES
+# 🎮 ADVANCED GAME VIEWS (CRASH & BJ)
 # ==========================================
-class ShopSelect(discord.ui.Select):
-    def __init__(self):
-        options = [
-            discord.SelectOption(label=n, description=f"{p[0]} pts (Req: P{p[1]})") 
-            for n, p in SHOP_CONFIG.items()
-        ]
-        super().__init__(placeholder="Browse the Market...", options=options)
+class CrashView(discord.ui.View):
+    def __init__(self, uid, bet):
+        super().__init__(); self.uid, self.bet, self.m, self.end = uid, bet, 1.0, False
+        self.limit = round(random.uniform(1.1, 4.0), 2)
 
-    async def callback(self, interaction: discord.Interaction):
-        item = self.values[0]
-        price, req_p = SHOP_CONFIG[item]
-        u = get_user(interaction.user.id)
-        
-        if u["prestige"] < req_p:
-            return await interaction.response.send_message(f"❌ This item requires Prestige **{req_p}**!", ephemeral=True)
-        if u["points"] < price:
-            return await interaction.response.send_message("❌ Low funds!", ephemeral=True)
-        
-        u["points"] -= price
-        u["inv"].append(item)
-        await interaction.response.send_message(f"✅ Purchased {item}!", ephemeral=True)
+    @discord.ui.button(label="CASH OUT", style=discord.ButtonStyle.green)
+    async def stop(self, interaction, b):
+        if self.end or interaction.user.id != self.uid: return
+        self.end = True
+        get_user(self.uid)["points"] += int(self.bet * self.m)
+        await interaction.response.edit_message(content=f"💰 Cashed at {self.m}x!", view=None)
+
+    async def run(self, msg):
+        while not self.end:
+            await asyncio.sleep(1.5)
+            self.m = round(self.m + 0.2, 1)
+            if self.m >= self.limit:
+                self.end = True
+                global JACKPOT; JACKPOT += int(self.bet * 0.1)
+                await msg.edit(content=f"💥 CRASHED at {self.m}x!", embed=None, view=None)
+                break
+            await msg.edit(embed=discord.Embed(title=f"📈 Multiplier: {self.m}x", color=0xf1c40f))
+
+class BlackjackView(discord.ui.View):
+    def __init__(self, uid, bet):
+        super().__init__(timeout=60); self.uid, self.bet = uid, bet
+        self.p = [random.randint(2,11), random.randint(2,11)]
+        self.d = [random.randint(2,11), random.randint(2,11)]
+
+    def get_embed(self, final=False):
+        e = discord.Embed(title="🃏 Blackjack", color=0x2ecc71)
+        e.add_field(name="You", value=f"Total: {sum(self.p)}")
+        e.add_field(name="Dealer", value=f"Total: {sum(self.d) if final else '?'}")
+        return e
+
+    @discord.ui.button(label="Hit", style=discord.ButtonStyle.blurple)
+    async def hit(self, i, b):
+        self.p.append(random.randint(2,11))
+        if sum(self.p) > 21: await i.response.edit_message(content="💥 BUST!", view=None)
+        else: await i.response.edit_message(embed=self.get_embed())
+
+    @discord.ui.button(label="Stand", style=discord.ButtonStyle.gray)
+    async def stand(self, i, b):
+        while sum(self.d) < 17: self.d.append(random.randint(2,11))
+        ps, ds, u = sum(self.p), sum(self.d), get_user(self.uid)
+        if ds > 21 or ps > ds: u["points"] += self.bet * 2; res = "✅ WIN!"
+        elif ps < ds: res = "❌ LOSE."; global JACKPOT; JACKPOT += int(self.bet * 0.1)
+        else: u["points"] += self.bet; res = "🤝 PUSH."
+        await i.response.edit_message(content=res, embed=self.get_embed(True), view=None)
 
 # ==========================================
-# 🖥️ HUB VIEW
+# 🖥️ THE HUB (RE-ORGANIZED)
 # ==========================================
 class UltimateHub(discord.ui.View):
     def __init__(self): super().__init__(timeout=None)
 
-    @discord.ui.button(label="Profile", style=discord.ButtonStyle.secondary, emoji="👤", row=0)
-    async def profile(self, interaction, b):
-        u = get_user(interaction.user.id, interaction.user.name)
-        e = discord.Embed(title=f"👤 {interaction.user.name}", color=0x3498db)
-        e.add_field(name="Wallet", value=f"🪙 {u['points']} pts")
-        e.add_field(name="Prestige", value=f"⭐ Level {u['prestige']}")
-        await interaction.response.send_message(embed=e, ephemeral=True)
+    @discord.ui.button(label="Profile", style=discord.ButtonStyle.gray, row=0)
+    async def p(self, i, b):
+        u = get_user(i.user.id, i.user.name)
+        await i.response.send_message(f"👤 {i.user.name} | Points: {u['points']} | Jackpot: {JACKPOT}", ephemeral=True)
 
-    @discord.ui.button(label="Gift Points", style=discord.ButtonStyle.primary, emoji="🎁", row=0)
-    async def gift(self, interaction, b):
-        await interaction.response.send_modal(GiftModal())
+    # GAME ROW 1
+    @discord.ui.button(label="Crash", style=discord.ButtonStyle.danger, emoji="📈", row=1)
+    async def g1(self, i, b): await i.response.send_modal(BetModal("crash"))
+    @discord.ui.button(label="Slots", style=discord.ButtonStyle.danger, emoji="🎰", row=1)
+    async def g2(self, i, b): await i.response.send_modal(BetModal("slots"))
+    @discord.ui.button(label="Blackjack", style=discord.ButtonStyle.danger, emoji="🃏", row=1)
+    async def g3(self, i, b): await i.response.send_modal(BetModal("blackjack"))
 
-    @discord.ui.button(label="Prestige", style=discord.ButtonStyle.primary, emoji="⭐", row=0)
-    async def prestige(self, interaction, b):
-        u = get_user(interaction.user.id)
-        if u["points"] < PRESTIGE_COST:
-            return await interaction.response.send_message(f"❌ Prestige requires {PRESTIGE_COST} points!", ephemeral=True)
-        u["points"] = 1000
-        u["prestige"] += 1
-        await interaction.response.send_message(f"✨ **{interaction.user.name}** reached Prestige **{u['prestige']}**!", ephemeral=False)
-
-    @discord.ui.button(label="Shop", style=discord.ButtonStyle.success, emoji="🛒", row=1)
-    async def shop(self, interaction, b):
-        v = discord.ui.View(); v.add_item(ShopSelect())
-        await interaction.response.send_message("🛍️ **Steam Market**", view=v, ephemeral=True)
-
-    @discord.ui.button(label="Leaderboard", style=discord.ButtonStyle.secondary, emoji="🏆", row=1)
-    async def lb(self, interaction, b):
-        sorted_users = sorted(DB.items(), key=lambda x: (x[1]['prestige'], x[1]['points']), reverse=True)
-        e = discord.Embed(title="🏆 Leaderboard", color=0xf1c40f)
-        desc = ""
-        for i, (uid, data) in enumerate(sorted_users[:10], 1):
-            desc += f"#{i} [P{data['prestige']}] {data['name']} — `{data['points']} pts`\n"
-        e.description = desc or "Empty."
-        await interaction.response.send_message(embed=e, ephemeral=True)
+    # GAME ROW 2
+    @discord.ui.button(label="Coinflip", style=discord.ButtonStyle.danger, emoji="🪙", row=2)
+    async def g4(self, i, b): await i.response.send_modal(BetModal("coinflip"))
+    @discord.ui.button(label="Dice", style=discord.ButtonStyle.danger, emoji="🎲", row=2)
+    async def g5(self, i, b): await i.response.send_modal(BetModal("dice"))
 
 # ==========================================
-# 🚀 BOT CORE
+# 🚀 LAUNCH
 # ==========================================
 bot = commands.Bot(command_prefix="!", intents=discord.Intents.all(), help_command=None)
 
 @bot.event
 async def on_message(message):
-    if message.author.bot: return
-    u = get_user(message.author.id, message.author.name)
-    u["points"] += (1 + u["prestige"])
+    if not message.author.bot: get_user(message.author.id, message.author.name)["points"] += 1
     await bot.process_commands(message)
 
 @bot.command()
-async def hub(ctx):
-    await ctx.send(embed=discord.Embed(title="🌐 Steam Global Hub v9", color=0x1b2838), view=UltimateHub())
+async def hub(ctx): await ctx.send("🌐 **Steam Hub v11**", view=UltimateHub())
 
 @bot.event
-async def on_ready(): print(f"✅ V9 Online: {bot.user}")
+async def on_ready(): print(f"✅ V11 Ready: {bot.user}")
 
 bot.run(TOKEN)
