@@ -1,5 +1,4 @@
 import discord
-from discord import app_commands
 from discord.ext import commands
 import json
 import os
@@ -19,28 +18,16 @@ class EconomyBot(commands.Bot):
         intents = discord.Intents.default()
         intents.message_content = True 
         intents.members = True
-        intents.manage_roles = True
         super().__init__(command_prefix="!", intents=intents, help_command=None)
 
-    async def setup_hook(self):
-        # Register the group
-        self.tree.add_command(minigames_group)
-        print("🛠️ Minigame commands registered to internal tree.")
-
     async def on_ready(self):
-        print(f'🚀 Logged in as {self.user}')
-        try:
-            # Force a global sync on startup
-            synced = await self.tree.sync()
-            print(f"✅ Global Sync: {len(synced)} commands are now live.")
-        except Exception as e:
-            print(f"❌ Startup Sync Failed: {e}")
+        print(f'🚀 Prefix Bot Online: {self.user}')
+        print('Commands: !minigames, !profile, !shop, !admin_give')
 
 bot = EconomyBot()
-minigames_group = app_commands.Group(name="minigames", description="All gaming and earning modes")
 
 # ==========================================
-# DATABASE UTILITIES
+# DATABASE HELPERS
 # ==========================================
 def get_data(file):
     if not os.path.exists(file): return {}
@@ -54,27 +41,14 @@ def save_data(file, data):
 
 def init_user(db, uid):
     if uid not in db:
-        db[uid] = {"points": 100, "messages": 0, "last_daily": None, "last_work": None}
+        db[uid] = {"points": 1000, "messages": 0, "last_daily": None, "last_work": None}
     return db[uid]
 
 # ==========================================
-# !SYNC EMERGENCY COMMAND
+# GAME LOGIC & VIEWS
 # ==========================================
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def sync(ctx):
-    """Force command refresh if / is not showing up."""
-    await ctx.send("🔄 **Force-syncing...** Please wait.")
-    try:
-        bot.tree.copy_global_to(guild=ctx.guild)
-        await bot.tree.sync(guild=ctx.guild)
-        await ctx.send("✅ Done! If you still don't see `/`, restart Discord (**Ctrl+R**).")
-    except Exception as e:
-        await ctx.send(f"❌ Error: {e}")
 
-# ==========================================
-# 🃏 BLACKJACK SYSTEM
-# ==========================================
+# --- Blackjack View ---
 def calc_hand(hand):
     val, aces = 0, 0
     for c in hand:
@@ -85,9 +59,9 @@ def calc_hand(hand):
     return val
 
 class BlackjackView(discord.ui.View):
-    def __init__(self, interaction, uid, bet):
+    def __init__(self, ctx, uid, bet):
         super().__init__(timeout=60)
-        self.interaction, self.uid, self.bet = interaction, str(uid), bet
+        self.ctx, self.uid, self.bet = ctx, str(uid), bet
         suits, vals = ['♠️', '♥️', '♦️', '♣️'], ['2','3','4','5','6','7','8','9','10','J','Q','K','A']
         self.deck = [{'v': v, 's': s} for v in vals for s in suits]
         random.shuffle(self.deck)
@@ -130,172 +104,69 @@ class BlackjackView(discord.ui.View):
         self.stop()
         await interaction.response.edit_message(content=f"**{res}**", embed=self.get_embed(True), view=None)
 
-# ==========================================
-# 🕹️ MINIGAMES GROUP COMMANDS
-# ==========================================
+# --- Main Menu View ---
+class MinigameMenu(discord.ui.View):
+    def __init__(self, ctx):
+        super().__init__(timeout=60)
+        self.ctx = ctx
 
-@minigames_group.command(name="blackjack", description="Play a hand of Blackjack")
-async def bj(interaction: discord.Interaction, bet: int):
-    db = get_data(DATA_FILE)
-    user = init_user(db, str(interaction.user.id))
-    if bet <= 0 or user["points"] < bet: return await interaction.response.send_message("❌ Invalid bet.", ephemeral=True)
-    user["points"] -= bet
-    save_data(DATA_FILE, db)
-    view = BlackjackView(interaction, interaction.user.id, bet)
-    await interaction.response.send_message(embed=view.get_embed(), view=view)
+    @discord.ui.button(label="Blackjack (100)", style=discord.ButtonStyle.green, emoji="🃏")
+    async def bj_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        db = get_data(DATA_FILE); user = init_user(db, str(interaction.user.id))
+        if user["points"] < 100: return await interaction.response.send_message("Need 100 pts!", ephemeral=True)
+        user["points"] -= 100; save_data(DATA_FILE, db)
+        view = BlackjackView(self.ctx, interaction.user.id, 100)
+        await interaction.response.send_message(embed=view.get_embed(), view=view)
 
-@minigames_group.command(name="slots", description="Spin the slots! (Win up to 10x)")
-async def slots(interaction: discord.Interaction, bet: int):
-    db = get_data(DATA_FILE)
-    user = init_user(db, str(interaction.user.id))
-    if bet <= 0 or user["points"] < bet: return await interaction.response.send_message("❌ Invalid bet.", ephemeral=True)
-    
-    emojis = ["🍒", "🍋", "🍇", "💎", "🔔"]
-    res = [random.choice(emojis) for _ in range(3)]
-    user["points"] -= bet
-    
-    if res[0] == res[1] == res[2]:
-        mult = 10 if res[0] == "💎" else 5
-        win = bet * mult
-        msg = f"🎰 **JACKPOT!** You won **{win:,}** pts!"
-        user["points"] += win
-    elif res[0] == res[1] or res[1] == res[2] or res[0] == res[2]:
-        win = int(bet * 1.5)
-        msg = f"✨ **Mini-Win!** You won **{win:,}** pts!"
-        user["points"] += win
-    else:
-        msg = "💀 Better luck next time."
-    
-    save_data(DATA_FILE, db)
-    await interaction.response.send_message(f"{' | '.join(res)}\n{msg}")
+    @discord.ui.button(label="Slots (50)", style=discord.ButtonStyle.blurple, emoji="🎰")
+    async def slots_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        db = get_data(DATA_FILE); user = init_user(db, str(interaction.user.id))
+        if user["points"] < 50: return await interaction.response.send_message("Need 50 pts!", ephemeral=True)
+        user["points"] -= 50
+        emojis = ["🍒", "🍋", "💎"]
+        res = [random.choice(emojis) for _ in range(3)]
+        if res[0] == res[1] == res[2]: 
+            win = 500 if res[0] == "💎" else 250
+            user["points"] += win; msg = f"JACKPOT! Won {win}"
+        else: msg = "Lost!"
+        save_data(DATA_FILE, db)
+        await interaction.response.send_message(f"{'|'.join(res)} - {msg}")
 
-@minigames_group.command(name="coinflip", description="50/50 chance to double points")
-async def coinflip(interaction: discord.Interaction, bet: int, side: str):
-    db = get_data(DATA_FILE)
-    user = init_user(db, str(interaction.user.id))
-    if bet <= 0 or user["points"] < bet: return await interaction.response.send_message("❌ Invalid bet.", ephemeral=True)
-    
-    res = random.choice(["heads", "tails"])
-    user["points"] -= bet
-    if side.lower() == res:
-        user["points"] += bet * 2
-        msg = f"🪙 It was **{res}**! You doubled your bet."
-    else:
-        msg = f"🪙 It was **{res}**... You lost."
-    
-    save_data(DATA_FILE, db)
-    await interaction.response.send_message(msg)
-
-@minigames_group.command(name="work", description="Earn a few points safely (1 hour cooldown)")
-async def work(interaction: discord.Interaction):
-    db = get_data(DATA_FILE)
-    user = init_user(db, str(interaction.user.id))
-    now = datetime.now()
-    
-    if user.get("last_work") and now < datetime.fromisoformat(user["last_work"]) + timedelta(hours=1):
-        rem = (datetime.fromisoformat(user["last_work"]) + timedelta(hours=1)) - now
-        return await interaction.response.send_message(f"⏳ Rest up! You can work again in {int(rem.total_seconds() // 60)} minutes.", ephemeral=True)
-    
-    pay = random.randint(50, 200)
-    jobs = ["Discord Moderator", "Code Bug Fixer", "Pizza Delivery", "Streamer"]
-    user["points"] += pay
-    user["last_work"] = now.isoformat()
-    save_data(DATA_FILE, db)
-    await interaction.response.send_message(f"💼 You worked as a **{random.choice(jobs)}** and earned **{pay}** pts!")
-
-@minigames_group.command(name="daily", description="Claim 500 points")
-async def daily(interaction: discord.Interaction):
-    db = get_data(DATA_FILE)
-    user = init_user(db, str(interaction.user.id))
-    now = datetime.now()
-    if user.get("last_daily") and now < datetime.fromisoformat(user["last_daily"]) + timedelta(days=1):
-        return await interaction.response.send_message("⏳ Already claimed today!", ephemeral=True)
-    user["points"] += 500
-    user["last_daily"] = now.isoformat()
-    save_data(DATA_FILE, db)
-    await interaction.response.send_message("🎁 **+500 points!**")
-
-@minigames_group.command(name="trivia", description="Answer correctly for 200 points")
-async def trivia(interaction: discord.Interaction):
-    questions = [
-        {"q": "What is the capital of France?", "a": "paris"},
-        {"q": "How many legs does a spider have?", "a": "8"},
-        {"q": "What is 10 + 15?", "a": "25"}
-    ]
-    item = random.choice(questions)
-    await interaction.response.send_message(f"🧠 **Trivia:** {item['q']} (You have 15s to type the answer!)")
-
-    def check(m): return m.author == interaction.user and m.channel == interaction.channel
-    try:
-        msg = await bot.wait_for('message', check=check, timeout=15.0)
-        if msg.content.lower() == item['a']:
-            db = get_data(DATA_FILE)
-            init_user(db, str(interaction.user.id))["points"] += 200
-            save_data(DATA_FILE, db)
-            await interaction.followup.send("✅ Correct! **+200 pts**.")
-        else:
-            await interaction.followup.send(f"❌ Wrong! The answer was {item['a']}.")
-    except asyncio.TimeoutError:
-        await interaction.followup.send("⏰ Time's up!")
-
-# --- (Other modes like KOTH and Lottery are kept from previous versions) ---
-
-@minigames_group.command(name="koth", description="Become King for 3x chat earnings")
-async def koth(interaction: discord.Interaction):
-    db = get_data(DATA_FILE)
-    if "koth" not in db: db["koth"] = {"king": None, "price": 1000}
-    uid = str(interaction.user.id)
-    price = db["koth"]["price"]
-    user = init_user(db, uid)
-    if user["points"] < price: return await interaction.response.send_message(f"❌ Need {price} pts.", ephemeral=True)
-    user["points"] -= price
-    db["koth"]["king"] = uid
-    db["koth"]["price"] += 500
-    save_data(DATA_FILE, db)
-    await interaction.response.send_message(f"👑 {interaction.user.mention} is the KING! (3x Multiplier)")
-
-@minigames_group.command(name="lottery", description="Buy ticket (100 pts)")
-async def lottery(interaction: discord.Interaction):
-    db = get_data(DATA_FILE)
-    user = init_user(db, str(interaction.user.id))
-    if "lottery" not in db: db["lottery"] = []
-    if user["points"] < 100: return await interaction.response.send_message("❌ Need 100 pts.", ephemeral=True)
-    user["points"] -= 100
-    db["lottery"].append(str(interaction.user.id))
-    save_data(DATA_FILE, db)
-    await interaction.response.send_message(f"🎟️ Ticket bought! Pot: {len(db['lottery'])*100}")
+    @discord.ui.button(label="Daily Bonus", style=discord.ButtonStyle.gray, emoji="🎁")
+    async def daily_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        db = get_data(DATA_FILE); user = init_user(db, str(interaction.user.id))
+        user["points"] += 500; save_data(DATA_FILE, db)
+        await interaction.response.send_message("You claimed 500 points!")
 
 # ==========================================
-# ADMIN & PROFILE
+# PREFIX COMMANDS
 # ==========================================
-@bot.tree.command(name="profile", description="Check points")
-async def profile(interaction: discord.Interaction, member: discord.Member = None):
-    member = member or interaction.user
-    db = get_data(DATA_FILE)
-    user = init_user(db, str(member.id))
-    embed = discord.Embed(title=f"👤 {member.display_name}", description=f"🪙 **{user['points']:,}** points", color=0x3498db)
-    await interaction.response.send_message(embed=embed)
 
-@bot.tree.command(name="shop", description="Browse roles")
-async def shop(interaction: discord.Interaction):
-    cfg = get_data(CONFIG_FILE)
-    embed = discord.Embed(title="🛒 Shop", color=0xf1c40f)
-    roles = "".join([f"• <@&{r}>: {i['price']} pts\n" for r, i in cfg.get("roles", {}).items()])
-    embed.add_field(name="Roles", value=roles or "None.")
-    await interaction.response.send_message(embed=embed)
+@bot.command()
+async def minigames(ctx):
+    """Main menu with buttons"""
+    embed = discord.Embed(title="🎮 Game Console", description="Select a game below! (Standard bets apply)", color=0x3498db)
+    await ctx.send(embed=embed, view=MinigameMenu(ctx))
 
-# ==========================================
-# EVENTS
-# ==========================================
+@bot.command()
+async def profile(ctx, member: discord.Member = None):
+    member = member or ctx.author
+    db = get_data(DATA_FILE); user = init_user(db, str(member.id))
+    await ctx.send(f"👤 **{member.display_name}** has **{user['points']:,}** points.")
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def admin_give(ctx, member: discord.Member, amount: int):
+    db = get_data(DATA_FILE); user = init_user(db, str(member.id))
+    user["points"] += amount; save_data(DATA_FILE, db)
+    await ctx.send(f"✅ Gave {amount} to {member.mention}")
+
+# Earning by chatting
 @bot.event
 async def on_message(message):
-    if message.author.bot or not message.guild: return
-    db = get_data(DATA_FILE)
-    uid = str(message.author.id)
-    user = init_user(db, uid)
-    mult = 3 if db.get("koth", {}).get("king") == uid else 1
-    user["points"] += (1 * mult)
-    save_data(DATA_FILE, db)
+    if message.author.bot: return
+    db = get_data(DATA_FILE); user = init_user(db, str(message.author.id))
+    user["points"] += 1; save_data(DATA_FILE, db)
     await bot.process_commands(message)
 
 bot.run(TOKEN)
