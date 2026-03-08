@@ -4,131 +4,137 @@ from discord.ext import commands
 import json
 import os
 import random
-from datetime import datetime, timedelta
 
-# --- CONFIGURATION ---
+# --- CONFIG ---
 TOKEN = 'MTQ3NjYwNTAxMDUwMTQzOTU0OA.GKeB4T.7DZq4z7p56d3CxnJRzM4AQ8fMWmtp8LCkdM2yg'
 DATA_FILE = "points_database.json"
+CONFIG_FILE = "server_config.json"
 
 class EconomyBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
         intents.message_content = True
         intents.members = True
+        intents.manage_roles = True
         super().__init__(command_prefix="!", intents=intents)
 
     async def setup_hook(self):
-        # This syncs the slash commands to your server
         await self.tree.sync()
-        print(f"Synced slash commands for {self.user}")
+        print(f"✅ Slash Commands Synced")
 
 bot = EconomyBot()
 
-# --- DATABASE HELPERS ---
-def load_db():
-    if not os.path.exists(DATA_FILE): return {}
-    with open(DATA_FILE, "r") as f:
+# --- DATA HELPERS ---
+def get_data(file):
+    if not os.path.exists(file): return {}
+    with open(file, "r") as f:
         try: return json.load(f)
         except: return {}
 
-def save_db(data):
-    with open(DATA_FILE, "w") as f:
+def save_data(file, data):
+    with open(file, "w") as f:
         json.dump(data, f, indent=4)
 
-def init_user(data, user_id):
-    if user_id not in data:
-        data[user_id] = {"points": 100, "messages": 0, "last_daily": None}
-    return data[user_id]
+# --- SETUP COMMAND ---
+@bot.tree.command(name="setup", description="[ADMIN] Configure shop prices and roles")
+@app_commands.describe(
+    item="What are you setting up?",
+    price="The price for this item",
+    role="The role (only if setting up a role item)"
+)
+@app_commands.choices(item=[
+    app_commands.Choice(name="Custom Name Color", value="custom_color"),
+    app_commands.Choice(name="Custom Role Name", value="custom_role"),
+    app_commands.Choice(name="Add Specific Role to Shop", value="add_role")
+])
+@commands.has_permissions(administrator=True)
+async def setup(interaction: discord.Interaction, item: app_commands.Choice[str], price: int, role: discord.Role = None):
+    config = get_data(CONFIG_FILE)
+    
+    if item.value == "add_role":
+        if not role:
+            return await interaction.response.send_message("❌ You must select a role to add it to the shop!", ephemeral=True)
+        if "roles" not in config: config["roles"] = {}
+        config["roles"][str(role.id)] = {"name": role.name, "price": price}
+        msg = f"✅ Added **{role.name}** to shop for **{price:,}** pts."
+    else:
+        config[item.value] = price
+        msg = f"✅ Set price for **{item.name}** to **{price:,}** pts."
 
-# --- POINTS FOR CHATTING ---
+    save_data(CONFIG_FILE, config)
+    await interaction.response.send_message(msg)
+
+# --- SHOP COMMAND ---
+@bot.tree.command(name="shop", description="Buy roles and custom perks")
+async def shop(interaction: discord.Interaction):
+    config = get_data(CONFIG_FILE)
+    embed = discord.Embed(title="🛒 Server Shop", color=0xf1c40f)
+    
+    # Custom Perks
+    color_p = config.get("custom_color", 5000)
+    role_p = config.get("custom_role", 20000)
+    embed.add_field(name="🎨 Custom Perks", value=f"• `/buy_color`: **{color_p:,}** pts\n• `/buy_custom_role`: **{role_p:,}** pts", inline=False)
+
+    # Roles
+    roles_list = ""
+    for r_id, info in config.get("roles", {}).items():
+        roles_list += f"• <@&{r_id}>: **{info['price']:,}** pts\n"
+    
+    embed.add_field(name="📜 Roles", value=roles_list or "No roles added yet.", inline=False)
+    await interaction.response.send_message(embed=embed)
+
+# --- MINIGAMES MENU ---
+@bot.tree.command(name="minigames", description="View all ways to earn points")
+async def minigames(interaction: discord.Interaction):
+    embed = discord.Embed(title="🎮 Minigames & Earning", color=0x3498db)
+    embed.add_field(name="🎲 Gambling", value="• `/rps [bet]`: Rock Paper Scissors\n• `/slots [bet]`: Try your luck\n• `/roulette [color] [bet]`: Roulette wheel", inline=False)
+    embed.add_field(name="⚒️ Daily & Work", value="• `/daily`: Claim 500 pts (24h)\n• `/work`: Earn random pts (10m cooldown)", inline=False)
+    embed.add_field(name="💬 Chatting", value="• Earn **1 point** for every message sent!", inline=False)
+    await interaction.response.send_message(embed=embed)
+
+# --- BUY LOGIC (COLOR) ---
+@bot.tree.command(name="buy_color", description="Buy a custom name color")
+async def buy_color(interaction: discord.Interaction, hex_code: str):
+    config = get_data(CONFIG_FILE)
+    pts_db = get_data(DATA_FILE)
+    cost = config.get("custom_color", 5000)
+    uid = str(interaction.user.id)
+    
+    user_pts = pts_db.get(uid, {}).get("points", 0)
+    if user_pts < cost:
+        return await interaction.response.send_message(f"❌ You need {cost:,} points!", ephemeral=True)
+
+    try:
+        color_val = int(hex_code.lstrip('#'), 16)
+        color = discord.Color(color_val)
+    except:
+        return await interaction.response.send_message("❌ Invalid hex (Example: #ff0000)", ephemeral=True)
+
+    # Deduction
+    pts_db[uid]["points"] -= cost
+    save_data(DATA_FILE, pts_db)
+
+    # Role Management
+    role_name = f"Color-{uid}"
+    role = discord.utils.get(interaction.guild.roles, name=role_name)
+    if role:
+        await role.edit(color=color)
+    else:
+        role = await interaction.guild.create_role(name=role_name, color=color)
+        await interaction.user.add_roles(role)
+    
+    await interaction.response.send_message(f"🎨 Color updated to **{hex_code}**!")
+
+# --- MESSAGE COUNTER ---
 @bot.event
 async def on_message(message):
     if message.author.bot or message.guild is None: return
-    data = load_db()
-    user = init_user(data, str(message.author.id))
-    user["points"] += 1
-    user["messages"] += 1
-    save_db(data)
+    db = get_data(DATA_FILE)
+    uid = str(message.author.id)
+    if uid not in db: db[uid] = {"points": 0, "messages": 0}
+    db[uid]["points"] += 1
+    db[uid]["messages"] += 1
+    save_data(DATA_FILE, db)
     await bot.process_commands(message)
-
-# --- SLASH COMMANDS ---
-
-@bot.tree.command(name="points", description="Check your point balance")
-async def points(interaction: discord.Interaction, member: discord.Member = None):
-    member = member or interaction.user
-    data = load_db()
-    user = init_user(data, str(member.id))
-    await interaction.response.send_message(f"🪙 **{member.display_name}** has **{user['points']}** points!")
-
-@bot.tree.command(name="daily", description="Claim your 500 daily points")
-async def daily(interaction: discord.Interaction):
-    data = load_db()
-    user = init_user(data, str(interaction.user.id))
-    now = datetime.now()
-    
-    last = user.get("last_daily")
-    if last and now < datetime.fromisoformat(last) + timedelta(days=1):
-        return await interaction.response.send_message("⏳ Try again tomorrow!", ephemeral=True)
-
-    user["points"] += 500
-    user["last_daily"] = now.isoformat()
-    save_db(data)
-    await interaction.response.send_message(f"🎁 {interaction.user.mention}, you claimed **500** points!")
-
-@bot.tree.command(name="rps", description="Play Rock Paper Scissors for points")
-@app_commands.describe(choice="Choose your weapon", bet="Amount to bet")
-@app_commands.choices(choice=[
-    app_commands.Choice(name="Rock", value="rock"),
-    app_commands.Choice(name="Paper", value="paper"),
-    app_commands.Choice(name="Scissors", value="scissors"),
-])
-async def rps(interaction: discord.Interaction, choice: app_commands.Choice[str], bet: int):
-    data = load_db()
-    user = init_user(data, str(interaction.user.id))
-    
-    if bet <= 0 or user["points"] < bet:
-        return await interaction.response.send_message("❌ Invalid bet.", ephemeral=True)
-
-    bot_choice = random.choice(["rock", "paper", "scissors"])
-    user["points"] -= bet
-    
-    if choice.value == bot_choice:
-        user["points"] += bet
-        msg = "🤝 It's a tie!"
-    elif (choice.value == "rock" and bot_choice == "scissors") or \
-         (choice.value == "paper" and bot_choice == "rock") or \
-         (choice.value == "scissors" and bot_choice == "paper"):
-        user["points"] += bet * 2
-        msg = f"🏆 You won **{bet * 2}** points!"
-    else:
-        msg = f"💀 I chose {bot_choice}. You lost."
-
-    save_db(data)
-    await interaction.response.send_message(f"You: **{choice.name}** | Me: **{bot_choice}**\n{msg}")
-
-@bot.tree.command(name="roulette", description="Bet on a color")
-@app_commands.choices(color=[
-    app_commands.Choice(name="🔴 Red (2x)", value="red"),
-    app_commands.Choice(name="⚫ Black (2x)", value="black"),
-    app_commands.Choice(name="🟢 Green (35x)", value="green"),
-])
-async def roulette(interaction: discord.Interaction, color: app_commands.Choice[str], bet: int):
-    data = load_db()
-    user = init_user(data, str(interaction.user.id))
-    if bet <= 0 or user["points"] < bet:
-        return await interaction.response.send_message("❌ Invalid bet.", ephemeral=True)
-
-    user["points"] -= bet
-    outcome = random.choices(["red", "black", "green"], weights=[18, 18, 1], k=1)[0]
-    
-    if color.value == outcome:
-        mult = 35 if outcome == "green" else 2
-        user["points"] += bet * mult
-        msg = f"🎡 Landed on **{outcome}**! Won **{bet*mult}** pts!"
-    else:
-        msg = f"🎡 Landed on **{outcome}**. Lost your bet."
-
-    save_db(data)
-    await interaction.response.send_message(msg)
 
 bot.run(TOKEN)
