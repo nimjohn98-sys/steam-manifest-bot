@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 
 # Bot configuration
-TOKEN = "YOUR_DISCORD_BOT_TOKEN_HERE"  # Replace with your bot token
+TOKEN = "MTQ3NjYwNTAxMDUwMTQzOTU0OA.G3LaxK.fZlnILy97sdYpcPdHM3iMilnt_htym2axHyeT8"  # Replace with your bot token
 PREFIX = "!"
 
 # Initialize bot
