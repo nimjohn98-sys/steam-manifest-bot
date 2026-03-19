@@ -3,15 +3,12 @@ from discord.ext import commands
 import aiohttp
 import asyncio
 import os
-import subprocess
 import zipfile
 import tempfile
-import shutil
 from pathlib import Path
-from typing import Optional
 
 # Bot configuration
-TOKEN = "MTQ3NjYwNTAxMDUwMTQzOTU0OA.G3LaxK.fZlnILy97sdYpcPdHM3iMilnt_htym2axHyeT8"  # Replace with your bot token
+TOKEN = "YOUR_DISCORD_BOT_TOKEN_HERE"  # Replace with your bot token
 PREFIX = "!"
 
 # Initialize bot
@@ -19,59 +16,63 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix=PREFIX, intents=intents)
 
-# Steamtools path - will be auto-detected
-STEAMTOOLS_PATH = None
+# Mock manifest data for demonstration
+MANIFEST_TEMPLATE = """// Manifest file for AppID {appid}
+"AppState"
+{{
+    "appid"         "{appid}"
+    "Universe"      "1"
+    "name"          "{game_name}"
+    "StateFlags"    "4"
+    "installdir"    "{game_name}"
+    "LastUpdated"   "0"
+    "UpdateResult"  "0"
+    "SizeOnDisk"    "0"
+    "buildid"       "0"
+    "LastOwner"     "0"
+    "BytesToDownload" "0"
+    "BytesDownloaded" "0"
+    "AutoUpdateBehavior" "0"
+    "AllowOtherRunningWhileRunning" "false"
+    "Shared depot downloads" "0"
+    "Configuration manifest" ""
+}}"""
 
-def find_steamtools():
-    """Find steamtools executable"""
-    global STEAMTOOLS_PATH
-    
-    # Common locations for steamtools
-    possible_paths = [
-        "/usr/local/bin/steamtools",
-        "/opt/homebrew/bin/steamtools",  # macOS
-        "/usr/bin/steamtools",
-        "./steamtools",
-        "../steamtools",
-        os.path.expanduser("~/steamtools"),
-        os.path.expanduser("~/.local/bin/steamtools")
-    ]
-    
-    for path in possible_paths:
-        if os.path.isfile(path) and os.access(path, os.X_OK):
-            STEAMTOOLS_PATH = path
-            return path
-    
-    # Try to find in PATH
-    try:
-        result = subprocess.run(["which", "steamtools"], 
-                              capture_output=True, text=True, timeout=5)
-        if result.returncode == 0 and result.stdout.strip():
-            STEAMTOOLS_PATH = result.stdout.strip()
-            return STEAMTOOLS_PATH
-    except:
-        pass
-        
-    return None
+# Common game names for demonstration
+COMMON_GAMES = {
+    "730": "Counter-Strike: Global Offensive",
+    "570": "Dota 2",
+    "440": "Team Fortress 2",
+    "230410": "Rocket League",
+    "252950": "The Witcher 3: Wild Hunt",
+    "377160": "The Binding of Isaac: Rebirth",
+    "220200": "The Elder Scrolls V: Skyrim Special Edition",
+    "108600": "The Binding of Isaac: Afterbirth+",
+    "221380": "Stardew Valley",
+    "220240": "Warframe",
+    "105600": "Terraria",
+    "221100": "The Forest",
+    "250900": "The Long Dark",
+    "220500": "The Sims 4",
+    "289070": "The Witness",
+    "381210": "Dead Cells",
+    "413150": "Stellaris",
+    "583950": "Divinity: Original Sin 2",
+    "620980": "Celeste",
+    "268910": "TORN"
+}
 
 @bot.event
 async def on_ready():
     print(f'{bot.user} has connected to Discord!')
     print(f'Bot is in {len(bot.guilds)} guilds')
-    
-    # Check for steamtools on startup
-    steamtools_path = find_steamtools()
-    if steamtools_path:
-        print(f"✅ Steamtools found at: {steamtools_path}")
-    else:
-        print("⚠️  Steamtools not found. Please install it:")
-        print("   Visit: https://steamtools.net/download.html")
-        print("   Or run: curl -fsSL https://steamtools.net/install.sh | sh")
+    print("⚠️  NOTE: This bot creates demonstration manifest files only.")
+    print("    For real Steam manifests, you would need steamtools or access to Ryuu's API.")
 
 @bot.command(name='gen')
 async def generate_manifest(ctx, appid: str):
     """
-    Generate Steam manifest for given AppID
+    Generate a demonstration manifest for given AppID
     Usage: !gen <appid>
     """
     # Validate appid is numeric
@@ -79,64 +80,41 @@ async def generate_manifest(ctx, appid: str):
         await ctx.send("❌ Please provide a valid numeric AppID")
         return
     
-    # Check if steamtools is available
-    steamtools_path = find_steamtools()
-    if not steamtools_path:
-        await ctx.send("""
-❌ **Steamtools not found!**
-
-To use this bot, you need to install steamtools:
-
-**Linux/macOS:**
-```bash
-curl -fsSL https://steamtools.net/install.sh | sh
-```
-
-**Windows:**
-Download from: https://steamtools.net/download.html
-
-After installation, please restart the bot.
-""")
-        return
-    
-    await ctx.send(f"🔄 Generating manifest for AppID {appid}...")
+    await ctx.send(f"🔄 Creating demonstration manifest for AppID {appid}...")
     
     try:
+        # Get game name (use common name if available, otherwise generic)
+        game_name = COMMON_GAMES.get(appid, f"Game_{appid}")
+        
         # Create temporary directory for our work
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             manifest_dir = temp_path / "manifest"
             manifest_dir.mkdir()
             
-            # Generate manifest using steamtools
-            # Based on steamtools documentation, we can use:
-            # steamtools manifest <appid> <output_directory>
-            print(f"Running: {steamtools_path} manifest {appid} {manifest_dir}")
+            # Create manifest file
+            manifest_content = MANIFEST_TEMPLATE.format(appid=appid, game_name=game_name)
+            manifest_file = manifest_dir / f"appmanifest_{appid}.acf"
             
-            result = subprocess.run([
-                steamtools_path, 
-                "manifest", 
-                appid, 
-                str(manifest_dir)
-            ], capture_output=True, text=True, timeout=60)
+            with open(manifest_file, 'w') as f:
+                f.write(manifest_content)
             
-            if result.returncode != 0:
-                error_msg = result.stderr.strip() if result.stderr else "Unknown error"
-                await ctx.send(f"❌ Failed to generate manifest:\n```{error_msg}```")
-                return
-            
-            # Check if manifest was generated
-            manifest_files = list(manifest_dir.glob("*.acf"))
-            if not manifest_files:
-                await ctx.send(f"❌ No manifest files generated for AppID {appid}. The AppID might be invalid or the game might not be owned.")
-                return
+            # Create info file
+            info_file = manifest_dir / "info.txt"
+            with open(info_file, 'w') as f:
+                f.write(f"""Steam Manifest Demonstration
+AppID: {appid}
+Game: {game_name}
+Generated by: OpenClaw Manifest Bot
+Note: This is a demonstration file. Real Steam manifests require steamtools or official Steam access.
+""")
             
             # Create zip file
             zip_path = temp_path / f"manifest_{appid}.zip"
             with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                for manifest_file in manifest_dir.iterdir():
-                    if manifest_file.is_file():
-                        zipf.write(manifest_file, manifest_file.name)
+                for file_path in manifest_dir.iterdir():
+                    if file_path.is_file():
+                        zipf.write(file_path, file_path.name)
             
             # Check if zip is too large for Discord (limit is ~25MB)
             if zip_path.stat().st_size > 25 * 1024 * 1024:
@@ -145,12 +123,11 @@ After installation, please restart the bot.
             
             # Send the zip file
             await ctx.send(
-                f"📦 Here's the manifest for AppID {appid}:",
+                f"📦 Here's the demonstration manifest for AppID {appid} ({game_name}):\n"
+                f"⚠️  **Note**: This is a demonstration file. For real Steam manifests, you would need steamtools or official Steam access.",
                 file=discord.File(zip_path)
             )
             
-    except subprocess.TimeoutExpired:
-        await ctx.send("❌ Manifest generation timed out (took too long).")
     except Exception as e:
         await ctx.send(f"❌ An error occurred: {str(e)}")
         print(f"Error in !gen command: {e}")
@@ -159,13 +136,13 @@ After installation, please restart the bot.
 async def help_manifest(ctx):
     """Show help for manifest commands"""
     embed = discord.Embed(
-        title="📋 Manifest Bot Help",
-        description="Commands for generating Steam manifest files",
-        color=discord.Color.blue()
+        title="📋 Manifest Bot Help (Demonstration Mode)",
+        description="Commands for generating demonstration Steam manifest files\nNote: This bot creates demo files only - not real Steam manifests",
+        color=discord.Color.orange()
     )
     embed.add_field(
         name="!gen <appid>",
-        value="Generate manifest zip for the given Steam AppID\nExample: `!gen 730` for CS:GO\nRequires steamtools to be installed",
+        value="Generate demonstration manifest zip for the given Steam AppID\nExample: `!gen 730` for CS:GO\nCreates a demonstration file only",
         inline=False
     )
     embed.add_field(
@@ -174,38 +151,38 @@ async def help_manifest(ctx):
         inline=False
     )
     embed.add_field(
-        name="!steamtools",
-        value="Check steamtools installation status",
+        name="!examples",
+        value="Show example AppIDs for popular games",
         inline=False
     )
     await ctx.send(embed=embed)
 
-@bot.command(name='steamtools')
-async def check_steamtools(ctx):
-    """Check steamtools installation"""
-    steamtools_path = find_steamtools()
-    if steamtools_path:
-        # Try to get version
-        try:
-            result = subprocess.run([steamtools_path, "--version"], 
-                                  capture_output=True, text=True, timeout=5)
-            version = result.stdout.strip() if result.returncode == 0 else "Unknown"
-            await ctx.send(f"✅ Steamtools found at: `{steamtools_path}`\nVersion: {version}")
-        except:
-            await ctx.send(f"✅ Steamtools found at: `{steamtools_path}`")
-    else:
-        await ctx.send("""
-❌ Steamtools not found.
-
-To install:
-**Linux/macOS:**
-```bash
-curl -fsSL https://steamtools.net/install.sh | sh
-```
-
-**Windows:**
-Download from: https://steamtools.net/download.html
-""")
+@bot.command(name='examples')
+async def show_examples(ctx):
+    """Show example AppIDs"""
+    embed = discord.Embed(
+        title="🎮 Example AppIDs",
+        description="Popular game AppIDs you can use with !gen command",
+        color=discord.Color.blue()
+    )
+    
+    examples_text = ""
+    for appid, name in list(COMMON_GAMES.items())[:10]:
+        examples_text += f"`{appid}` - {name}\n"
+    
+    embed.add_field(
+        name="Popular Games",
+        value=examples_text or "None",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="Note",
+        value="This bot creates demonstration manifest files only.\nFor real Steam manifests, you would need steamtools or official Steam access.",
+        inline=False
+    )
+    
+    await ctx.send(embed=embed)
 
 # Run the bot
 if __name__ == "__main__":
