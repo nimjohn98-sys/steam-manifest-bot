@@ -3,7 +3,7 @@
 -- Strategy: Packet Jitter, Human Mimicry, and Action Obfuscation
 -- STATUS: ACTIVE EVASION MODE
 
-local Rayfield = loadstring(game:HttpGet('https://raw.githubusercontent.com/RayfieldLibrary/RayfieldLibrary/main/source.lua'))()()
+local Rayfield = loadstring(game:HttpGet('https://raw.githubusercontent.com/SiriusSoftwareLtd/Rayfield/main/source.lua'))()
 
 local Configuration = {
     Name = "👻 DEEPSHI FLOW | GHOST PROTOCOL",
